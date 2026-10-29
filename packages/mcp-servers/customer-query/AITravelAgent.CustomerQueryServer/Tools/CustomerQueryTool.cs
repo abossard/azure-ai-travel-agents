@@ -2,6 +2,7 @@ using System.ComponentModel;
 
 using AITravelAgent.CustomerQueryServer.Models;
 
+using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
 namespace AITravelAgent.CustomerQueryServer.Tools;
@@ -15,7 +16,9 @@ public class CustomerQueryTool(ILogger<CustomerQueryTool> logger)
     private static readonly string[] preferences = [ "window", "aisle", "extra_legroom" ];
     private static readonly Random random = Random.Shared;
 
-    [McpServerTool(Name = "analyze_customer_query", Title = "Analyze Customer Query")]
+#pragma warning disable MCPEXP001
+    [McpServerTool(Name = "analyze_customer_query", Title = "Analyze Customer Query", TaskSupport = ToolTaskSupport.Forbidden)]
+#pragma warning restore MCPEXP001
     [Description("Analyzes the customer query and provides a response.")]
     public async Task<CustomerQueryAnalysisResult> AnalyzeCustomerQueryAsync(
         [Description("The customer query to analyze")] string customerQuery)

@@ -57,8 +57,12 @@ apiRouter.get("/tools", async (req, res) => {
 // Chat endpoint with Server-Sent Events (SSE) for streaming responses
 // @ts-ignore - Ignoring TypeScript errors for Express route handlers
 apiRouter.post("/chat", async (req, res) => {
-  req.on("close", () => {
-    console.log("Client disconnected, aborting...");
+  let clientDisconnected = false;
+  res.on("close", () => {
+    if (!res.writableEnded) {
+      clientDisconnected = true;
+      console.log("Client disconnected, aborting...");
+    }
   });
 
   if (!req.body) {
@@ -87,39 +91,50 @@ apiRouter.post("/chat", async (req, res) => {
     const workflow = await setupAgents(tools);
     const context = workflow.run(message);
 
-    const readableStream = new Readable({
-      async read() {
-        try {
-          for await (const event of context) {
-            const serializedData = JSON.stringify({
-              type: "metadata",
-              kind: "llamaindex-ts",
-              event: event,
-              data: event.data ? JSON.parse(JSON.stringify(event.data)) : null,
-            });
-        
-            console.log("Event streamed", { event, serializedData });
-
-            this.push(serializedData + CHUNK_END);
-            console.log("Pushed event:", serializedData);
+    const readableStream = Readable.from((async function* () {
+      try {
+        for await (const event of context) {
+          if (event.eventName === "error") {
+            yield JSON.stringify({
+              type: "error",
+              message: typeof event.data === "string" ? event.data : "Workflow failed",
+            }) + CHUNK_END;
+            continue;
           }
-          this.push(null); // Close the stream
-        } catch (error: any) {
-          console.error("Error during streaming:", error?.message);
-          this.push({
-            type: "error",
-            message: error instanceof Error ? error.message : String(error),
-          } + CHUNK_END);
+          const eventType = event.type ?? event.eventName;
+          const data = eventType === "4"
+            ? {
+                agent: event.data?.agent,
+                currentAgentName: event.data?.currentAgentName,
+                delta: event.data?.delta,
+              }
+            : event.data;
+          yield JSON.stringify({
+            type: "metadata",
+            kind: "llamaindex-ts",
+            event: { type: eventType, data },
+            data: data ?? null,
+          }) + CHUNK_END;
         }
-      },
-    });
+      } catch (error: unknown) {
+        if (clientDisconnected && error instanceof Error && "code" in error && error.code === "ERR_STREAM_PREMATURE_CLOSE") {
+          return;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        console.error("Error during streaming:", message);
+        yield JSON.stringify({ type: "error", message }) + CHUNK_END;
+      }
+    })(), { objectMode: false });
 
     await pipeline(readableStream, res);
   } catch (error) {
+    if (clientDisconnected && error instanceof Error && "code" in error && error.code === "ERR_STREAM_PREMATURE_CLOSE") {
+      return;
+    }
     console.error("Error occurred:", error);
     if (!res.headersSent) {
       res.status(500).json({ error: (error as any).message });
-    } else {
+    } else if (!res.destroyed) {
       res.write(
         `${JSON.stringify({
           type: "error",

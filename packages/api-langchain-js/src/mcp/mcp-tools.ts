@@ -4,7 +4,6 @@ import { MCPClient as MCPSSEClient } from "./mcp-sse-client.js";
 
 function client(config: MCPClientOptions): MCPSSEClient | MCPHTTPClient {
   console.log(`Initializing MCP client`);
-  console.log(`Using configuration:`, {config});
 
   if (config.type === "sse") {
     // legacy implementation using SSE

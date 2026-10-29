@@ -35,8 +35,6 @@ const MCP_ENDPOINT = "/mcp";
 // Add logging middleware
 router.use((req, res, next) => {
   console.log(`Received ${req.method} request for ${req.originalUrl}`);
-  // log headers
-  console.log("Request Headers:", JSON.stringify(req.headers, null, 2));
   // log body if present
   if (req.body && Object.keys(req.body).length > 0) {
     console.log("Request Body:", JSON.stringify(req.body, null, 2));
@@ -65,9 +63,7 @@ router.use((req, res, next) => {
   const authHeader = (req.headers["authorization"] ||
     req.headers["Authorization"]) as string;
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    console.error(
-      'Missing or invalid Authorization header. Got "' + authHeader + '"'
-    );
+    console.error("Missing or invalid Authorization header.");
     res.status(401).json({ error: "Missing or invalid Authorization header." });
     return;
   }

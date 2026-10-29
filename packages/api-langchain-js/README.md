@@ -46,6 +46,7 @@ List available MCP tools
 Chat endpoint with streaming support
 - Request body: `{ message: string, tools: Array }`
 - Response: Server-Sent Events stream
+- Token text, tool input/output, and completion messages retain their stream fields. Other graph events contain UI-facing diagnostic fields rather than full graph snapshots; long diagnostic message content is limited to a 1,024-character preview.
 
 ## Usage
 
@@ -113,6 +114,9 @@ See `.env.example` in the repository root for all configuration options.
 ```bash
 # Build
 npm run build
+
+# Test
+npm test
 
 # Clean
 npm run clean

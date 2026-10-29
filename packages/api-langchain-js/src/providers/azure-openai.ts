@@ -11,6 +11,14 @@ const AZURE_COGNITIVE_SERVICES_SCOPE =
 export const llm = async () => {
   console.log("Using Azure OpenAI");
 
+  const endpoint = process.env.AZURE_OPENAI_ENDPOINT;
+  if (!endpoint) {
+    throw new Error("AZURE_OPENAI_ENDPOINT is required");
+  }
+  const baseURL = new URL(endpoint);
+  const path = baseURL.pathname.replace(/\/+$/, "");
+  baseURL.pathname = path.endsWith("/openai/v1") ? path : `${path}/openai/v1`;
+
   const isRunningInLocalDocker = process.env.IS_LOCAL_DOCKER_ENV === "true";
 
   if (isRunningInLocalDocker) {
@@ -29,13 +37,13 @@ export const llm = async () => {
     const token = process.env.AZURE_OPENAI_API_KEY;
     return new ChatOpenAI({
       configuration: {
-        baseURL: process.env.AZURE_OPENAI_ENDPOINT,
+        baseURL: baseURL.toString(),
       },
       modelName: process.env.AZURE_OPENAI_DEPLOYMENT_NAME ?? "gpt-5",
       streaming: true,
       useResponsesApi: true,
       apiKey: token,
-      verbose: true,
+      verbose: false,
     });
   }
 
@@ -67,12 +75,12 @@ export const llm = async () => {
 
   return new ChatOpenAI({
     configuration: {
-      baseURL: process.env.AZURE_OPENAI_ENDPOINT,
+      baseURL: baseURL.toString(),
     },
     modelName: process.env.AZURE_OPENAI_DEPLOYMENT_NAME ?? "gpt-5",
     streaming: true,
     useResponsesApi: true,
     apiKey: await azureADTokenProvider(),
-    verbose: true,
+    verbose: false,
   });
 };

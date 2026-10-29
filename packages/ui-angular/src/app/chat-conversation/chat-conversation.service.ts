@@ -85,6 +85,7 @@ export class ChatService {
               break;
 
             case 'END':
+              this.isLoading.set(false);
               this.updateAndNotifyAgentChatMessageState('', {
                 metadata: {
                   events: this.agentEventsBuffer,
@@ -170,9 +171,28 @@ export class ChatService {
 
         // LangChain events
         case 'agent_complete':
-          if (state.event === 'llamaindex-stop') {
-            // LlamaIndex llamaindex-stop event contains the final message content
-            delta = state.data?.message.content;
+          if (eventType === 'llamaindex-stop') {
+            const content = state.data?.message?.content;
+            const current = this.messagesBuffer[this.messagesBuffer.length - 1]?.content ?? '';
+            delta = '';
+            if (typeof content === 'string' && content && !current.endsWith(content)) {
+              const prefix = new Array<number>(content.length).fill(0);
+              for (let i = 1, match = 0; i < content.length; i++) {
+                while (match > 0 && content[i] !== content[match]) match = prefix[match - 1];
+                if (content[i] === content[match]) match++;
+                prefix[i] = match;
+              }
+              let overlap = 0;
+              for (let i = Math.max(0, current.length - content.length); i < current.length; i++) {
+                while (overlap > 0 && (overlap === content.length || current[i] !== content[overlap])) {
+                  overlap = prefix[overlap - 1];
+                }
+                if (current[i] === content[overlap]) overlap++;
+              }
+              delta = content.slice(overlap);
+            }
+          } else if (eventType === 'Complete') {
+            delta = '';
           }
 
           this.updateAndNotifyAgentChatMessageState(delta, {
@@ -232,7 +252,7 @@ export class ChatService {
             }
           }
 
-          if (delta.trim()) {
+          if (typeof delta === 'string' && delta.length > 0) {
             this.isLoading.set(false);
             // this.assistantMessageInProgress.set(true);
             // this.agentMessageStream.next(this.agentMessageBuffer);

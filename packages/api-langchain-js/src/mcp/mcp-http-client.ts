@@ -50,7 +50,7 @@ export class MCPClient extends EventEmitter {
   }
 
   async callTool(name: string, toolArgs: string) {
-    console.log(`Calling tool ${name} with arguments:`, toolArgs);
+    console.log(`Calling tool ${name}`);
 
     return await this.client.callTool({
       name,

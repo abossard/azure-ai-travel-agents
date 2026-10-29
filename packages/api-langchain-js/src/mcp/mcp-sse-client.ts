@@ -66,7 +66,7 @@ export class MCPClient {
   }
 
   async callTool(toolName: string, args: Record<string, any>) {
-    console.log(`Called ${toolName} with params:`, args);
+    console.log(`Called ${toolName}`);
     return tracer.startActiveSpan("processQuery", async (span) => {
       log("Tools", this.tools);
 
@@ -75,7 +75,6 @@ export class MCPClient {
         arguments: args,
       });
 
-      log("Tool result", toolResult);
       span.end();
       return toolResult;
     });

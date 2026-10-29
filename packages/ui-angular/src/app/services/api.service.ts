@@ -2,7 +2,8 @@ import {
   HttpClient,
   HttpDownloadProgressEvent,
   HttpEvent,
-  HttpEventType
+  HttpEventType,
+  HttpResponse
 } from '@angular/common/http';
 import { inject, Injectable, NgZone } from '@angular/core';
 import { BehaviorSubject, catchError, distinct, filter, startWith, switchMap } from 'rxjs';
@@ -31,6 +32,7 @@ export interface ChatEvent {
   data?: any;
   message?: string;
   statusCode?: number;
+  error?: { message?: string; statusCode?: number };
   agentName?: string;
   kind?: string;
 }
@@ -171,13 +173,16 @@ export class ApiService {
         switchMap((event: HttpEvent<string>): any => {
           // NOTE: partialText is cumulative! it contains all the data received so far, not just the new chunk.
           // We need to track what we've already processed and only handle the new data.
-          const fullText = (event as HttpDownloadProgressEvent).partialText! || '';
+          const isFinal = event.type === HttpEventType.Response;
+          const fullText = isFinal
+            ? (event as HttpResponse<string>).body ?? ''
+            : (event as HttpDownloadProgressEvent).partialText ?? '';
 
           // Extract only the NEW data
           const newData = fullText.substring(this.lastProcessedIndex);
           this.lastProcessedIndex = fullText.length;
 
-          if (!newData.trim()) {
+          if (!newData && !this.incompleteJsonBuffer && !isFinal) {
             return [];
           }
 
@@ -189,27 +194,54 @@ export class ApiService {
 
           // The last part might be incomplete, save it for next time
           // (unless this is the final Response event)
-          if (event.type !== HttpEventType.Response) {
+          if (!isFinal) {
             this.incompleteJsonBuffer = parts.pop() || '';
           } else {
             this.incompleteJsonBuffer = '';
           }
 
-          return parts.map((jsonValue: string) => {
+          const states: Partial<ChatStreamState>[] = parts.filter((part) => part.trim()).map((jsonValue: string) => {
             try {
-              const parsedData = JSON.parse(
+              const parsedData: ChatEvent = JSON.parse(
                 jsonValue.replace(/data:\s+/, '').trim()
               );
+              const eventName = typeof parsedData.event === 'string'
+                ? parsedData.event
+                : parsedData.event?.['type'];
+              if (parsedData.type === 'error' || eventName === 'error' || eventName === 'workflow_error' || parsedData.error) {
+                const message = parsedData.message ?? parsedData.error?.message ?? parsedData.data?.error ??
+                  (typeof parsedData.data === 'string' ? parsedData.data : 'An error occurred');
+                return {
+                  type: 'ERROR',
+                  event: parsedData,
+                  error: {
+                    type: 'server',
+                    message,
+                    statusCode: parsedData.statusCode ?? parsedData.error?.statusCode ?? 0,
+                  },
+                  id: Date.now(),
+                };
+              }
               return {
-                type: event.type === HttpEventType.Response ? 'END' : 'MESSAGE',
+                type: 'MESSAGE',
                 event: parsedData,
                 id: Date.now(),
               };
             } catch (error) {
               this.handleApiError(error, 0);
-              return null;
+              const message = error instanceof Error ? error.message : String(error);
+              return {
+                type: 'ERROR',
+                event: { type: 'error', message },
+                error: { type: 'general', message, statusCode: 0 },
+                id: Date.now(),
+              };
             }
           });
+          if (isFinal) {
+            states.push({ type: 'END', event: { type: 'end' }, id: Date.now() });
+          }
+          return states;
         }),
         distinct(),
         catchError((error) => {

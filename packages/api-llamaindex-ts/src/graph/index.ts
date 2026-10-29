@@ -30,6 +30,7 @@ export class TravelAgentsWorkflow {
 
   async *run(input: string): AsyncGenerator<{
     eventName: string;
+    type?: string;
     data: any;
   }, void, unknown> {
     if (!this.supervisor) {
@@ -39,8 +40,10 @@ export class TravelAgentsWorkflow {
     try {
       const eventStream = this.supervisor.runStream(input);
       for await (let event of eventStream) {
+        const serialized = "toJSON" in event && typeof event.toJSON === "function" ? event.toJSON() : undefined;
         const evt = {
           ...event,
+          type: typeof serialized?.type === "string" ? serialized.type : undefined,
           eventName: event.toString(),
           data: {
             ...event.data,

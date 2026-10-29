@@ -16,6 +16,7 @@ export const McpToolsConfig = (): {
       url: process.env["MCP_ECHO_PING_URL"] + MCP_API_HTTP_PATH,
       type: "http",
       verbose: true,
+      accessToken: process.env["MCP_ECHO_PING_ACCESS_TOKEN"],
       requestInit: {
           headers: {
               "Authorization": "Bearer " + process.env["MCP_ECHO_PING_ACCESS_TOKEN"],
@@ -36,7 +37,7 @@ export const McpToolsConfig = (): {
   },
   "itinerary-planning": {
     config: {
-      url: process.env["MCP_ITINERARY_PLANNING_URL"] + MCP_API_HTTP_PATH,
+      url: process.env["MCP_ITINERARY_PLANNING_URL"] + MCP_API_HTTP_PATH + "/",
       type: "http",
       verbose: true,
     },

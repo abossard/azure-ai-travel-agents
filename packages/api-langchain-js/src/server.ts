@@ -19,20 +19,6 @@ app.use(express.json());
 
 const apiRouter = express.Router();
 
-// Add request body logging middleware for debugging
-apiRouter.use((req, res, next) => {
-  if (req.path === "/chat" && req.method === "POST") {
-    const contentType = req.headers["content-type"]?.replace(/\n|\r/g, "");
-    const body =
-      typeof req.body === "string"
-        ? req.body.replace(/\n|\r/g, "")
-        : JSON.stringify(req.body).replace(/\n|\r/g, "");
-    console.log("Request Content-Type:", contentType);
-    console.log("Request body:", body);
-  }
-  next();
-});
-
 // Health check endpoint
 apiRouter.get("/health", (req, res) => {
   res.status(200).json({ 
@@ -45,7 +31,7 @@ apiRouter.get("/health", (req, res) => {
 apiRouter.get("/tools", async (req, res) => {
   try {
     const tools = await mcpToolsList(Object.values(McpToolsConfig()));
-    console.log("Available tools:", tools);
+    console.log("Available MCP servers:", tools.length);
     res.status(200).json({ tools });
   } catch (error) {
     console.error("Error fetching MCP tools:", error);
@@ -56,8 +42,12 @@ apiRouter.get("/tools", async (req, res) => {
 // Chat endpoint with Server-Sent Events (SSE) for streaming responses
 // @ts-ignore - Ignoring TypeScript errors for Express route handlers
 apiRouter.post("/chat", async (req, res) => {
-  req.on("close", () => {
-    console.log("Client disconnected, aborting...");
+  let clientDisconnected = false;
+  res.on("close", () => {
+    if (!res.writableEnded) {
+      clientDisconnected = true;
+      console.log("Client disconnected, aborting...");
+    }
   });
 
   if (!req.body) {
@@ -72,7 +62,7 @@ apiRouter.post("/chat", async (req, res) => {
 
   const message = req.body.message;
   const tools = req.body.tools;
-  console.log("Tools to use:", JSON.stringify(tools, null, 2));
+  console.log("Selected MCP servers:", Array.isArray(tools) ? tools.length : 0);
 
   if (!message) {
     return res.status(400).json({ error: "Message is required" });
@@ -86,34 +76,38 @@ apiRouter.post("/chat", async (req, res) => {
     const workflow = await setupAgents(tools);
     const context = workflow.run(message);
 
-    const readableStream = new Readable({
-      async read() {
-        try {
-          for await (const event of context) {
-            const { eventName, data } = event;
-            const serializedData = JSON.stringify({
-              type: "metadata",
-              kind: "langchain-js",
-              agent: (data as any)?.agent || null,
-              event: eventName,
-              data: data ? JSON.parse(JSON.stringify(data)) : null,
-            });
-            this.push(serializedData + CHUNK_END);
-            console.log("Pushed event:", serializedData);
-          }
-          this.push(null); // Close the stream
-        } catch (error: any) {
-          console.error("Error during streaming:", error?.message);
+    const readableStream = Readable.from((async function* () {
+      try {
+        for await (const event of context) {
+          const { eventName, data } = event;
+          const serializedData = JSON.stringify({
+            type: "metadata",
+            kind: "langchain-js",
+            agent: (data as any)?.agent || null,
+            event: eventName,
+            data: data ? JSON.parse(JSON.stringify(data)) : null,
+          });
+          yield serializedData + CHUNK_END;
         }
-      },
-    });
+      } catch (error: unknown) {
+        if (clientDisconnected && error instanceof Error && "code" in error && error.code === "ERR_STREAM_PREMATURE_CLOSE") {
+          return;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        console.error("Error during streaming:", message);
+        yield JSON.stringify({ type: "error", message }) + CHUNK_END;
+      }
+    })(), { objectMode: false });
 
     await pipeline(readableStream, res);
   } catch (error) {
+    if (clientDisconnected && error instanceof Error && "code" in error && error.code === "ERR_STREAM_PREMATURE_CLOSE") {
+      return;
+    }
     console.error("Error occurred:", error);
     if (!res.headersSent) {
       res.status(500).json({ error: (error as any).message });
-    } else {
+    } else if (!res.destroyed) {
       res.write(
         `${JSON.stringify({
           type: "error",

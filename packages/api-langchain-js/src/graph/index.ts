@@ -11,6 +11,68 @@ export interface WorkflowState extends AgentState {
   next?: string;
 }
 
+const DEBUG_CONTENT_PREVIEW_LENGTH = 1024;
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function previewDebugContent(value: unknown): unknown {
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  if (!text || text.length <= DEBUG_CONTENT_PREVIEW_LENGTH) return value;
+
+  let preview = "";
+  let length = 0;
+  for (const character of text) {
+    if (length++ === DEBUG_CONTENT_PREVIEW_LENGTH) return `${preview}...`;
+    preview += character;
+  }
+  return value;
+}
+
+function projectMessages(value: unknown, includeTools: boolean) {
+  if (!Array.isArray(value)) return undefined;
+
+  // The reasoning panel reads the last message's content and the second message's tool names.
+  return value.map((message, index) => {
+    const record = asRecord(message);
+    const fields = asRecord(record?.kwargs) ?? record;
+    const metadata = asRecord(fields?.response_metadata);
+    const tools = includeTools && index === 1 && Array.isArray(metadata?.tools)
+      ? metadata.tools.map((tool: unknown) => ({ name: asRecord(tool)?.name }))
+      : undefined;
+
+    return {
+      kwargs: {
+        ...(index === value.length - 1 && fields?.content !== undefined && {
+          content: previewDebugContent(fields.content),
+        }),
+        ...(includeTools && index === 1 && tools && { response_metadata: { tools } }),
+      },
+    };
+  });
+}
+
+function projectDebugData(agent: string, value: unknown) {
+  const data = asRecord(value);
+  const inputMessages = projectMessages(asRecord(data?.input)?.messages, false);
+  const output = asRecord(data?.output);
+  const outputMessages = projectMessages(asRecord(output?.update)?.messages, true);
+
+  return {
+    agent: typeof data?.agent === "string" ? data.agent : agent,
+    ...(inputMessages && { input: { messages: inputMessages } }),
+    ...(output && (output.goto !== undefined || outputMessages) && {
+      output: {
+        ...(output.goto !== undefined && { goto: output.goto }),
+        ...(outputMessages && { update: { messages: outputMessages } }),
+      },
+    }),
+  };
+}
+
 export class TravelAgentsWorkflow {
   private llm: BaseChatModel;
   private agents: any[] = [];
@@ -50,11 +112,13 @@ export class TravelAgentsWorkflow {
         // Filter and yield relevant events
         if (event.event === "on_chat_model_stream") {
           // Stream LLM tokens
+          const chunk = asRecord(event.data?.chunk);
+          const content = chunk?.content ?? asRecord(chunk?.kwargs)?.content;
           yield {
             eventName: "llm_token",
             data: {
               agent,
-              chunk: event.data?.chunk,
+              chunk: chunk && { kwargs: { content } },
             },
           };
         } else if (event.event === "on_tool_start") {
@@ -91,10 +155,7 @@ export class TravelAgentsWorkflow {
           // Yield other events for debugging
           yield {
             eventName: event.event,
-            data: {
-              agent,
-              ...event.data,
-            },
+            data: projectDebugData(agent, event.data),
           };
         }
       }

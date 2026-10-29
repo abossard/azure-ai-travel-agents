@@ -34,5 +34,6 @@ docker model pull ai/phi4:14B-Q4_0
 
 # Only build docker compose, do not start the containers yet
 Write-Host '>> Building MCP servers with Docker Compose...'
-$composeServices = $tools | ForEach-Object { "mcp-$_" } | Join-String ' '
-docker compose -f docker-compose.yml up --build -d $composeServices
+$composeServices = @($tools | ForEach-Object { "mcp-$_" })
+docker compose -f docker-compose.yml up --build -d @composeServices
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

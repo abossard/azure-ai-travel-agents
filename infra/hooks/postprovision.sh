@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -e
+
 ## This script is executed after the Azure Developer CLI (azd) provisioning step
 # It sets up the environment for the AI Travel Agents application, including creating .env files,
 # installing dependencies, and preparing the MCP tools.

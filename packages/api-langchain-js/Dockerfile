@@ -9,9 +9,7 @@ WORKDIR /app
 # Copy package files first for better caching
 COPY package*.json ./
 
-# Use cache mount for npm and install dependencies
-RUN --mount=type=cache,target=/root/.npm \
-    npm i --prefer-offline --no-audit
+RUN npm i --prefer-offline --no-audit
 
 # Now copy source code (changes more frequently)
 COPY tsconfig.json ./
@@ -36,9 +34,7 @@ COPY --from=builder /app/package*.json ./
 # Set production environment
 ENV NODE_ENV=production
 
-# Install production dependencies with cache mount
-RUN --mount=type=cache,target=/root/.npm \
-    npm ci --prefer-offline --omit=dev --ignore-scripts --no-audit
+RUN npm ci --prefer-offline --omit=dev --ignore-scripts --no-audit
 
 # Change ownership to non-root user
 RUN chown -R nodejs:nodejs /app

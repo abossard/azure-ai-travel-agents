@@ -208,6 +208,10 @@ module apiLangchainJs 'br/public:avm/res/app/container-app:0.8.0' = {
             value: orchestratorConfig.chat.model
           }
           {
+            name: 'AZURE_OPENAI_DEPLOYMENT_NAME'
+            value: orchestratorConfig.chat.model
+          }
+          {
             name: 'MCP_ITINERARY_PLANNING_URL'
             value: 'https://mcp-itinerary-planning.internal.${containerAppsEnvironment.outputs.defaultDomain}'
           }
@@ -339,6 +343,10 @@ module apiLlamaindexTs 'br/public:avm/res/app/container-app:0.8.0' = {
             value: orchestratorConfig.chat.model
           }
           {
+            name: 'AZURE_OPENAI_DEPLOYMENT_NAME'
+            value: orchestratorConfig.chat.model
+          }
+          {
             name: 'MCP_ITINERARY_PLANNING_URL'
             value: 'https://mcp-itinerary-planning.internal.${containerAppsEnvironment.outputs.defaultDomain}'
           }
@@ -417,7 +425,7 @@ module apiMafPython 'br/public:avm/res/app/container-app:0.8.0' = {
   name: 'apiMafPython'
   params: {
     name: 'api-maf-python'
-    ingressTargetPort: 4000
+    ingressTargetPort: 4010
     corsPolicy: {
       allowedOrigins: [
         'https://ui-angular.${containerAppsEnvironment.outputs.defaultDomain}'
@@ -470,6 +478,14 @@ module apiMafPython 'br/public:avm/res/app/container-app:0.8.0' = {
             value: orchestratorConfig.chat.model
           }
           {
+            name: 'AZURE_OPENAI_DEPLOYMENT_NAME'
+            value: orchestratorConfig.chat.model
+          }
+          {
+            name: 'AZURE_OPENAI_API_VERSION'
+            value: orchestratorConfig.chat.apiVersion
+          }
+          {
             name: 'MCP_ITINERARY_PLANNING_URL'
             value: 'https://mcp-itinerary-planning.internal.${containerAppsEnvironment.outputs.defaultDomain}'
           }
@@ -491,7 +507,7 @@ module apiMafPython 'br/public:avm/res/app/container-app:0.8.0' = {
           }
           {
             name: 'PORT'
-            value: '4000'
+            value: '4010'
           }
         ],
         apiMafPythonEnv,

@@ -66,6 +66,7 @@ var orchestratorConfig = {
   chat: {
     model: 'gpt-5-mini'
     version: '2025-08-07'
+    apiVersion: '2024-02-15-preview'
     capacity: 50
   }
   embedding: {
@@ -126,7 +127,7 @@ output NG_API_URL_LLAMAINDEX_TS string = resources.outputs.NG_API_URL_LLAMAINDEX
 output NG_API_URL_MAF_PYTHON string = resources.outputs.NG_API_URL_MAF_PYTHON
 output AZURE_OPENAI_ENDPOINT string = resources.outputs.AZURE_OPENAI_ENDPOINT
 output AZURE_OPENAI_DEPLOYMENT string = orchestratorConfig.chat.model
-output AZURE_OPENAI_API_VERSION string = orchestratorConfig.chat.version
+output AZURE_OPENAI_API_VERSION string = orchestratorConfig.chat.apiVersion
 
 //  Orchestrator configuration
 output EMBEDDING_MODEL string = orchestratorConfig.embedding.model

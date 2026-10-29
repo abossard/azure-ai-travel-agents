@@ -74,6 +74,7 @@ foreach ($service in $tsApiServices) {
     if (-not (Test-Path "./packages/$service/node_modules")) {
         Write-Host "Installing dependencies for $service service..."
         npm ci --prefix=./packages/$service --legacy-peer-deps
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     } else {
         Write-Host "Dependencies for $service service already installed."
     }
@@ -115,6 +116,7 @@ Write-Host ">> Installing dependencies for the UI service..."
 if (-not (Test-Path "./packages/ui-angular/node_modules")) {
     Write-Host "Installing dependencies for the UI service..."
     npm ci --prefix=./packages/ui-angular
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 } else {
     Write-Host "Dependencies for the UI service already installed."
 }
@@ -146,6 +148,7 @@ foreach ($tool in $tools) {
         Write-Host ">> Installing dependencies for $tool service..."
         if (-not (Test-Path "$toolPath/node_modules")) {
             npm ci --prefix=$toolPath
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         } else {
             Write-Host "Dependencies for $tool service already installed."
         }
@@ -159,5 +162,6 @@ docker desktop enable model-runner --tcp 12434
 
 # Only build docker compose, do not start the containers yet
 Write-Host ">> Building MCP servers with Docker Compose..."
-$toolServices = $tools | Join-String -Separator ' '
-docker compose -f docker-compose.yml up --build -d $toolServices
+$toolServices = @($tools | ForEach-Object { "mcp-$_" })
+docker compose -f docker-compose.yml up --build -d @toolServices
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -75,7 +75,8 @@ services:
       - "4200:4200"
     env_file: 
       - "./packages/ui-angular/.env"
-      - "./packages/ui-angular/.env.docker" # override .env with .env.docker
+      - path: "./packages/ui-angular/.env.docker"
+        required: false
 
   aspire-dashboard:
     container_name: aspire-dashboard

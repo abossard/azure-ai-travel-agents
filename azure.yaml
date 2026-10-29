@@ -11,6 +11,7 @@ services:
     docker:
       context: .
       path: Dockerfile
+      remoteBuild: true
 
   api-llamaindex-ts:
     project: packages/api-llamaindex-ts
@@ -19,6 +20,7 @@ services:
     docker:
       context: .
       path: Dockerfile
+      remoteBuild: true
 
   api-maf-python:
     project: packages/api-maf-python
@@ -27,6 +29,7 @@ services:
     docker:
       context: .
       path: Dockerfile
+      remoteBuild: true
 
   ui-angular:
     project: packages/ui-angular
@@ -35,14 +38,27 @@ services:
     docker:
       context: .
       path: Dockerfile.production
+      remoteBuild: true
     hooks:
       prebuild:
         windows:
           shell: pwsh
-          run: 'echo "NG_API_URL=""$env:NG_API_URL""" > .env.production'
+          run: |
+            $names = 'NG_API_URL_LANGCHAIN_JS', 'NG_API_URL_LLAMAINDEX_TS', 'NG_API_URL_MAF_PYTHON'
+            $values = foreach ($name in $names) {
+              $value = [Environment]::GetEnvironmentVariable($name)
+              if (-not $value) { throw "$name is required" }
+              "$name=$value"
+            }
+            $values | Set-Content -Path .env.production -Encoding utf8
         posix:
           shell: sh
-          run: 'echo NG_API_URL=\"$NG_API_URL\" > .env.production'
+          run: |
+            : "${NG_API_URL_LANGCHAIN_JS:?NG_API_URL_LANGCHAIN_JS is required}"
+            : "${NG_API_URL_LLAMAINDEX_TS:?NG_API_URL_LLAMAINDEX_TS is required}"
+            : "${NG_API_URL_MAF_PYTHON:?NG_API_URL_MAF_PYTHON is required}"
+            printf 'NG_API_URL_LANGCHAIN_JS="%s"\nNG_API_URL_LLAMAINDEX_TS="%s"\nNG_API_URL_MAF_PYTHON="%s"\n' \
+              "$NG_API_URL_LANGCHAIN_JS" "$NG_API_URL_LLAMAINDEX_TS" "$NG_API_URL_MAF_PYTHON" > .env.production
 
   mcp-customer-query:
     project: packages/mcp-servers/customer-query/AITravelAgent.CustomerQueryServer/
@@ -78,6 +94,7 @@ services:
     docker:
       path: ./Dockerfile
       context: .
+      remoteBuild: true
 
 hooks:
   postprovision:

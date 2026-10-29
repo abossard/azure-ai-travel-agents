@@ -1,6 +1,7 @@
 """MAF Workflow Orchestrator for travel planning agents with simplified MCP integration."""
 
 import logging
+from contextlib import AsyncExitStack
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from ..config import settings
@@ -26,6 +27,7 @@ class TravelWorkflowOrchestrator:
     def __init__(self):
         """Initialize the workflow orchestrator."""
         self.chat_client: Optional[Any] = None
+        self.resources = AsyncExitStack()
         self.all_tools: List[Any] = []
 
         # Initialize agents (will be configured with tools during initialize())
@@ -48,7 +50,7 @@ class TravelWorkflowOrchestrator:
         logger.info("Initializing MAF workflow with simplified MCP integration...")
 
         # Get the chat client from Microsoft Agent Framework
-        self.chat_client = await get_llm_client()
+        self.chat_client = await get_llm_client(self.resources)
         logger.info(f"Chat client initialized for provider: {settings.llm_provider}")
 
         # Determine which tools to enable (default: all except echo-ping for production)
@@ -128,7 +130,7 @@ class TravelWorkflowOrchestrator:
         if not self.triage_agent:
             raise RuntimeError("Workflow not initialized. Call initialize() first.")
 
-        logger.info(f"Processing message through MAF workflow: {message[:100]}...")
+        logger.info("Processing message through MAF workflow")
 
         # Use the triage agent to process the message
         # It will coordinate with other agents as needed through its tools
@@ -152,7 +154,7 @@ class TravelWorkflowOrchestrator:
         if not self.triage_agent:
             raise RuntimeError("Workflow not initialized. Call initialize() first.")
 
-        logger.info(f"Processing message with streaming: {message[:100]}...")
+        logger.info("Processing message with streaming")
 
         # For now, use non-streaming and yield as single chunk
         # TODO: Implement true streaming with MAF's streaming capabilities
@@ -167,6 +169,7 @@ class TravelWorkflowOrchestrator:
         logger.info("Cleaning up workflow resources...")
 
         try:
+            await self.resources.aclose()
             # Close all MCP tool connections
             await tool_registry.close_all()
             logger.info("MCP tool connections closed")
@@ -211,7 +214,7 @@ class TravelWorkflowOrchestrator:
         if not self.chat_client or not self.triage_agent:
             raise RuntimeError("Workflow not initialized. Call initialize() first.")
 
-        logger.info(f"Processing request: {message[:100]}...")
+        logger.info("Processing request")
 
         try:
             # Use the triage agent to process the request
@@ -248,7 +251,7 @@ class TravelWorkflowOrchestrator:
         if not self.chat_client or not self.triage_agent:
             raise RuntimeError("Workflow not initialized. Call initialize() first.")
 
-        logger.info(f"Processing streaming request: {message[:100]}...")
+        logger.info("Processing streaming request")
 
         try:
             # Send agent setup event

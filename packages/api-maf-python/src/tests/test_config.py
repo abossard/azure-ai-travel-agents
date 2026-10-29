@@ -38,3 +38,26 @@ def test_settings_custom_port():
     )
 
     assert settings.port == 5000
+
+
+@pytest.mark.parametrize(
+    ("server_id", "suffix"),
+    [
+        ("echo-ping", "/mcp"),
+        ("customer-query", "/mcp"),
+        ("itinerary-planning", "/mcp/"),
+        ("destination-recommendation", "/mcp"),
+    ],
+)
+def test_mcp_server_paths(monkeypatch, server_id, suffix):
+    from src.orchestrator.tools.tool_config import get_mcp_tools_config
+
+    for name in (
+        "MCP_ECHO_PING_URL",
+        "MCP_CUSTOMER_QUERY_URL",
+        "MCP_ITINERARY_PLANNING_URL",
+        "MCP_DESTINATION_RECOMMENDATION_URL",
+    ):
+        monkeypatch.setenv(name, "http://localhost:5003")
+
+    assert get_mcp_tools_config()[server_id]["config"]["url"] == f"http://localhost:5003{suffix}"

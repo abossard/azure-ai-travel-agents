@@ -2,6 +2,10 @@
 
 This directory contains the MCP (Model Context Protocol) tools integration using **Microsoft Agent Framework's built-in MCP support**.
 
+The basic pattern uses Agent Framework 1.23.0. Other historical examples below predate that release; see `tool_registry.py` and `../magentic_workflow.py` for the current API.
+
+When using `get_llm_client()` without a resource stack, call `close_llm_clients()` on the same event loop after the clients are no longer needed.
+
 ## Overview
 
 The implementation uses MAF's `MCPStreamableHTTPTool` exclusively - no custom transport code. The Tool Registry stores metadata and creates fresh tool instances per request, following MAF best practices.
@@ -26,9 +30,9 @@ The implementation uses MAF's `MCPStreamableHTTPTool` exclusively - no custom tr
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                    MCP Servers                               │
-│  • customer-query         (Java/Spring, port 5001)           │
-│  • destination-recommendation (Python, port 5002)            │
-│  • itinerary-planning     (Node.js, port 5003)               │
+│  • customer-query         (.NET, port 5001)                  │
+│  • destination-recommendation (Java/Spring, port 5002)      │
+│  • itinerary-planning     (Python, port 5003)               │
 │  • echo-ping              (Test server, port 5004)           │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -97,45 +101,32 @@ This file contains legacy code and may be removed in future versions.
 ### Basic Pattern (Recommended)
 
 ```python
-from agent_framework import MCPStreamableHTTPTool, ChatAgent, MagenticBuilder
-from orchestrator.tools.tool_registry import tool_registry
-from orchestrator.providers import get_llm_client
+import asyncio
 
-# 1. Get LLM client
-chat_client = await get_llm_client()
+from agent_framework import Agent
+from src.orchestrator.providers import close_llm_clients, get_llm_client
+from src.orchestrator.tools.tool_registry import tool_registry
 
-# 2. Get MCP server metadata
-metadata = tool_registry.get_server_metadata("customer-query")
 
-# 3. Create MCP tool (MAF handles everything)
-mcp_tool = MCPStreamableHTTPTool(
-    name=metadata["name"],
-    url=metadata["url"],
-    headers={"Authorization": f"Bearer {token}"} if token else None,
-    load_tools=True,
-    load_prompts=False,
-    request_timeout=30,
-) if metadata else None
+async def run():
+    try:
+        client = await get_llm_client()
+        tool = tool_registry.create_mcp_tool("customer-query")
+        if tool is None:
+            raise RuntimeError("Customer Query MCP server is not configured")
+        async with tool:
+            agent = Agent(
+                name="CustomerQueryAgent",
+                client=client,
+                tools=tool,
+                instructions="Analyze customer travel inquiries.",
+            )
+            return await agent.run("Analyze this travel inquiry.")
+    finally:
+        await close_llm_clients()
 
-# 4. Create agent with tool
-customer_agent = ChatAgent(
-    name="CustomerQueryAgent",
-    chat_client=chat_client,
-    tools=mcp_tool,  # ← MAF manages lifecycle
-    instructions="You are a customer service agent...",
-)
 
-# 5. Build workflow
-workflow = (
-    MagenticBuilder()
-    .participants(CustomerQueryAgent=customer_agent)
-    .on_event(on_event, mode=MagenticCallbackMode.STREAMING)
-    .build()
-)
-
-# 6. Run workflow (tool connects/disconnects automatically)
-async for event in workflow.run_stream(user_message):
-    yield event
+print(asyncio.run(run()).text)
 ```
 
 ### Creating Multiple Agents with Different Tools

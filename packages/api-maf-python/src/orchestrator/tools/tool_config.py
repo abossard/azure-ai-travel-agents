@@ -1,6 +1,6 @@
 """MCP Tool Configuration following TypeScript implementation patterns."""
 
-from typing import Literal, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 from src.config import Settings
 
@@ -21,6 +21,7 @@ class MCPServerConfig(TypedDict):
     url: str
     type: Literal["http", "sse"]
     verbose: bool
+    accessToken: NotRequired[str | None]
 
 
 class MCPServerDefinition(TypedDict):
@@ -48,6 +49,7 @@ def get_mcp_tools_config() -> dict[McpServerName, MCPServerDefinition]:
                 "url": f"{settings.mcp_echo_ping_url}{MCP_API_HTTP_PATH}",
                 "type": "http",
                 "verbose": True,
+                "accessToken": settings.mcp_echo_ping_access_token,
             },
             "id": "echo-ping",
             "name": "Echo Test",
@@ -63,7 +65,7 @@ def get_mcp_tools_config() -> dict[McpServerName, MCPServerDefinition]:
         },
         "itinerary-planning": {
             "config": {
-                "url": f"{settings.mcp_itinerary_planning_url}{MCP_API_HTTP_PATH}",
+                "url": f"{settings.mcp_itinerary_planning_url}{MCP_API_HTTP_PATH}/",
                 "type": "http",
                 "verbose": True,
             },

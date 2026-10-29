@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -15,15 +16,20 @@ from .config import settings
 from .orchestrator.magentic_workflow import magentic_orchestrator
 from .orchestrator.tools.tool_registry import tool_registry
 
-from agent_framework.observability import setup_observability
-
-setup_observability(enable_sensitive_data=True)
+from agent_framework.observability import configure_otel_providers
+from azure.monitor.opentelemetry import configure_azure_monitor
 
 # Configure logging
 logging.basicConfig(
     level=settings.log_level,
     format='{"timestamp": "%(asctime)s", "level": "%(levelname)s", "message": "%(message)s"}',
 )
+
+if os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING"):
+    configure_azure_monitor()
+else:
+    configure_otel_providers()
+
 logger = logging.getLogger(__name__)
 
 
@@ -49,6 +55,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Shutdown
     logger.info("Shutting down Azure AI Travel Agents API (Python)")
+    try:
+        await magentic_orchestrator.resources.aclose()
+    except Exception as e:
+        logger.error(f"Error closing LLM client: {e}")
     try:
         await tool_registry.close_all()
         logger.info("✓ Cleanup complete")
@@ -169,7 +179,7 @@ async def chat(request: ChatRequest) -> StreamingResponse:
         }
         """
         try:
-            logger.info(f"Processing chat request with Magentic: {request.message[:100]}...")
+            logger.info("Processing chat request with Magentic")
 
             # Send START event
             start_event = {
@@ -201,6 +211,8 @@ async def chat(request: ChatRequest) -> StreamingResponse:
                     stream_state = internal_event
 
                 yield f"data: {json.dumps(stream_state)}\n\n"
+                if internal_event.get("type") == "error":
+                    return
 
             # Send END event
             end_event = {

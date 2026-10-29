@@ -102,7 +102,7 @@ class ToolRegistry:
         return MCPStreamableHTTPTool(
             name=metadata["name"],
             url=metadata["url"],
-            headers=headers,
+            static_headers=headers,
             load_tools=True,
             load_prompts=False,
             request_timeout=30,
@@ -164,68 +164,44 @@ class ToolRegistry:
                     logger.warning(f"Could not create MCP tool for server '{server_id}'")
                     return server_info
 
-                # Use the tool in async context manager to connect
-                async with mcp_tool:
-                    logger.info(f"MCP server {metadata['name']} is reachable")
-                    server_info["reachable"] = True
+                async with asyncio.timeout(30):
+                    async with mcp_tool:
+                        logger.info(f"MCP server {metadata['name']} is reachable")
+                        server_info["reachable"] = True
 
-                    # List tools from the server
-                    # The MCPStreamableHTTPTool loads tools on connection
-                    # Access them via the tool's internal state
-                    if hasattr(mcp_tool, "_tools") and mcp_tool._tools:
-                        tools_list = []
-                        for tool in mcp_tool._tools:
-                            # Convert tool to dict format
-                            tool_info = {
-                                "name": tool.metadata.name if hasattr(tool, "metadata") else str(tool),
-                                "description": tool.metadata.description if hasattr(tool, "metadata") else "",
-                            }
-                            tools_list.append(tool_info)
+                        if mcp_tool.functions:
+                            tools_list = []
+                            for tool in mcp_tool.functions:
+                                tool_info = {
+                                    "name": tool.name,
+                                    "description": tool.description,
+                                }
+                                tools_list.append(tool_info)
 
-                        server_info["tools"] = tools_list
-                        logger.info(f"MCP server {metadata['name']} has {len(tools_list)} tools")
-                    else:
-                        logger.info(f"MCP server {metadata['name']} has 0 tools")
+                            server_info["tools"] = tools_list
+                            logger.info(f"MCP server {metadata['name']} has {len(tools_list)} tools")
+                        else:
+                            logger.info(f"MCP server {metadata['name']} has 0 tools")
 
+            except TimeoutError:
+                logger.warning(f"MCP server {metadata['name']} connection timed out")
+                server_info["reachable"] = False
+                server_info["selected"] = False
+                server_info["tools"] = []
+                server_info["error"] = "MCP server connection timed out"
             except Exception as error:
                 logger.error(f"MCP server {metadata['name']} is not reachable: {str(error)}")
+                server_info["reachable"] = False
+                server_info["selected"] = False
+                server_info["tools"] = []
                 server_info["error"] = str(error)
 
             return server_info
 
-        # Check all servers concurrently, matching TS Promise.all pattern
-        tasks = []
-        for server_id, metadata in self._server_metadata.items():
-            task = asyncio.create_task(check_server_and_list_tools(server_id, metadata))
-            tasks.append(task)
-
-        # Wait for all checks with overall timeout
-        try:
-            results = await asyncio.wait_for(
-                asyncio.gather(*tasks, return_exceptions=True),
-                timeout=10.0,  # Increased timeout for actual MCP connections
-            )
-        except asyncio.TimeoutError:
-            logger.warning("Tool list overall timeout - returning partial results")
-            results = []
-            for task in tasks:
-                if task.done():
-                    try:
-                        results.append(task.result())
-                    except Exception as e:
-                        logger.debug(f"Error getting task result: {e}")
-                else:
-                    task.cancel()
-
-        # Build tools list from results
-        tools_list = []
-        for result in results:
-            if isinstance(result, dict):
-                tools_list.append(result)
-            elif isinstance(result, Exception):
-                logger.debug(f"Error checking server: {result}")
-
-        return {"tools": tools_list}
+        results = await asyncio.gather(
+            *(check_server_and_list_tools(server_id, metadata) for server_id, metadata in self._server_metadata.items())
+        )
+        return {"tools": results}
 
     async def close_all(self) -> None:
         """Cleanup resources.

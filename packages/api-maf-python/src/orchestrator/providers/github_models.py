@@ -1,9 +1,10 @@
 """GitHub Models LLM provider."""
 
 import logging
+from contextlib import AsyncExitStack
 from typing import Any
 
-from agent_framework.openai import OpenAIChatClient
+from agent_framework.openai import OpenAIChatCompletionClient
 from openai import AsyncOpenAI
 
 from src.config import settings
@@ -15,11 +16,11 @@ logger = logging.getLogger(__name__)
 class GitHubModelsProvider(LLMProvider):
     """GitHub Models LLM provider."""
 
-    async def get_client(self) -> Any:
+    async def get_client(self, resources: AsyncExitStack | None = None) -> Any:
         """Get GitHub Models chat client for Microsoft Agent Framework.
 
         Returns:
-            OpenAIChatClient configured for GitHub Models
+            OpenAIChatCompletionClient configured for GitHub Models
 
         Raises:
             ValueError: If required configuration is missing
@@ -37,10 +38,12 @@ class GitHubModelsProvider(LLMProvider):
             base_url="https://models.inference.ai.azure.com",
             api_key=settings.github_token,
         )
+        if resources is not None:
+            resources.push_async_callback(async_client.close)
 
-        # Wrap with MAF's OpenAIChatClient
-        maf_client = OpenAIChatClient(
-            model_id=settings.github_model,
+        # Wrap with MAF's chat-completions client
+        maf_client = OpenAIChatCompletionClient(
+            model=settings.github_model,
             async_client=async_client,
         )
 

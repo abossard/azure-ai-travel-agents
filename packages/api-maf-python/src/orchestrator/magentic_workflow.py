@@ -4,31 +4,24 @@ This module implements the Magentic orchestration pattern from Microsoft Agent F
 for coordinating multiple specialized travel planning agents. Agents work with MCP tools
 following the exact patterns from Microsoft Agent Framework samples.
 
-Reference: https://learn.microsoft.com/en-us/agent-framework/user-guide/workflows/orchestrations/magentic
-Sample: https://github.com/microsoft/agent-framework/blob/main/python/samples/getting_started/workflows/orchestration/magentic.py
+Reference: https://github.com/microsoft/agent-framework/blob/main/python/samples/03-workflows/orchestrations/magentic.py
 """
 
 import asyncio
 import logging
+from contextlib import AsyncExitStack
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from agent_framework import (
-    ChatAgent,
+    Agent,
     MCPStreamableHTTPTool,
-    MagenticAgentDeltaEvent,
-    MagenticAgentMessageEvent,
-    MagenticBuilder,
-    MagenticCallbackEvent,
-    MagenticCallbackMode,
-    MagenticFinalResultEvent,
-    MagenticOrchestratorMessageEvent,
-    WorkflowOutputEvent,
 )
-from agent_framework.exceptions import ServiceResponseException
+from agent_framework.orchestrations import MagenticBuilder
 
+from src.config import settings
+from src.orchestrator.delegation_guard import GuardedMagenticManager
 from src.orchestrator.providers import get_llm_client
 from src.orchestrator.tools.tool_registry import tool_registry
-from src.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -46,13 +39,14 @@ class MagenticTravelOrchestrator:
     - DestinationAgent: Recommends destinations (no MCP tools, uses LLM knowledge)
 
     Reference:
-    - Magentic: https://github.com/microsoft/agent-framework/blob/main/python/samples/getting_started/workflows/orchestration/magentic.py
+    - Magentic: https://github.com/microsoft/agent-framework/blob/main/python/samples/03-workflows/orchestrations/magentic.py
     - MCP tools: https://github.com/microsoft/agent-framework/blob/main/python/samples/getting_started/agents/openai/openai_responses_client_with_hosted_mcp.py
     """
 
     def __init__(self):
         """Initialize the Magentic travel orchestrator."""
         self.chat_client: Optional[Any] = None
+        self.resources = AsyncExitStack()
         logger.info("Magentic Travel Orchestrator initialized")
 
     async def initialize(self) -> None:
@@ -60,7 +54,11 @@ class MagenticTravelOrchestrator:
         logger.info("Initializing Magentic travel planning workflow...")
 
         # Get the chat client from Microsoft Agent Framework
-        self.chat_client = await get_llm_client()
+        try:
+            self.chat_client = await get_llm_client(self.resources)
+        except Exception:
+            await self.resources.aclose()
+            raise
         logger.info(f"✓ Chat client initialized for provider: {settings.llm_provider}")
         logger.info("✓ Magentic workflow ready")
 
@@ -85,7 +83,7 @@ class MagenticTravelOrchestrator:
         if not self.chat_client:
             raise RuntimeError("Chat client not initialized. Call initialize() first.")
 
-        logger.info(f"Processing request with Magentic workflow: {user_message[:100]}...")
+        logger.info("Processing request with Magentic workflow")
 
         # Get MCP server metadata
         customer_query_metadata = tool_registry.get_server_metadata("customer-query")
@@ -106,7 +104,7 @@ class MagenticTravelOrchestrator:
                 return MCPStreamableHTTPTool(
                     name=metadata["name"],
                     url=metadata["url"],
-                    headers=headers if headers else None,
+                    static_headers=headers if headers else None,
                     load_tools=True,
                     load_prompts=False,
                     request_timeout=30,
@@ -124,12 +122,12 @@ class MagenticTravelOrchestrator:
         if customer_query_tool:
             logger.info("✓ Customer Query MCP tool configured")
         else:
-            logger.warning("⚠ Customer Query agent will run without MCP tools")
+            logger.warning("⚠ Customer Query MCP tool is not configured")
 
         if itinerary_tool:
             logger.info("✓ Itinerary MCP tool configured")
         else:
-            logger.warning("⚠ Itinerary agent will run without MCP tools")
+            logger.warning("⚠ Itinerary MCP tool is not configured")
 
         try:
             # Create event queue for streaming
@@ -137,93 +135,121 @@ class MagenticTravelOrchestrator:
             workflow_done = False
             workflow_error: Optional[Exception] = None
 
-            # Define streaming callback
-            async def on_event(event: MagenticCallbackEvent) -> None:
-                """Stream workflow events to UI in real-time."""
-                event_data = self._convert_workflow_event(event)
-                if event_data:
-                    await event_queue.put(event_data)
-                    logger.debug(f"→ Event: {event_data.get('event')} from {event_data.get('agent')}")
-
-            # Build workflow with agents and tools
-            # Following exact pattern from MAF sample - tools passed at agent creation
-            workflow = (
-                MagenticBuilder()
-                .participants(
-                    CustomerQueryAgent=ChatAgent(
-                        name="CustomerQueryAgent",
-                        description="Handles customer questions and travel information",
-                        instructions=(
-                            "You are a Customer Query Agent for a travel planning system. "
-                            "Answer customer questions about destinations, hotels, and travel logistics. "
-                            + (
-                                "Use the MCP tools to retrieve accurate information. "
-                                if customer_query_tool
-                                else "Use your knowledge. "
-                            )
-                            + "Be helpful and customer-focused."
-                        ),
-                        chat_client=self.chat_client,
-                        tools=customer_query_tool,  # Tool passed - MAF manages lifecycle
+            agents = [
+                Agent(
+                    name="CustomerQueryAgent",
+                    description="Handles customer questions and travel information",
+                    instructions=(
+                        "You are a Customer Query Agent for a travel planning system. "
+                        "Answer customer questions about destinations, hotels, and travel logistics. "
+                        + (
+                            "Use the MCP tools to retrieve accurate information. "
+                            if customer_query_tool
+                            else "Use your knowledge. "
+                        )
+                        + "Be helpful and customer-focused."
                     ),
-                    ItineraryAgent=ChatAgent(
-                        name="ItineraryAgent",
-                        description="Creates detailed travel itineraries and schedules",
-                        instructions=(
-                            "You are an Itinerary Planning Agent for a travel planning system. "
-                            "Create detailed day-by-day travel itineraries. "
-                            + ("Use the MCP tools to plan itineraries. " if itinerary_tool else "Use your knowledge. ")
-                            + "Be thorough and organized."
-                        ),
-                        chat_client=self.chat_client,
-                        tools=itinerary_tool,  # Tool passed - MAF manages lifecycle
+                    client=self.chat_client,
+                    tools=customer_query_tool,
+                ),
+                Agent(
+                    name="ItineraryAgent",
+                    description="Creates detailed travel itineraries and schedules",
+                    instructions=(
+                        "You are an Itinerary Planning Agent for a travel planning system. "
+                        "Create detailed day-by-day travel itineraries. "
+                        + (
+                            "Use the MCP tools for requested hotel or flight lookups. "
+                            if itinerary_tool
+                            else "Use your knowledge. "
+                        )
+                        + "Be thorough and organized."
                     ),
-                    DestinationAgent=ChatAgent(
-                        name="DestinationAgent",
-                        description="Recommends travel destinations based on preferences",
-                        instructions=(
-                            "You are a Destination Recommendation Agent. "
-                            "Recommend destinations based on customer preferences. "
-                            "Be creative and match recommendations to customer needs."
-                        ),
-                        chat_client=self.chat_client,
-                        # No MCP tools - uses LLM knowledge
+                    client=self.chat_client,
+                    tools=itinerary_tool,
+                ),
+                Agent(
+                    name="DestinationAgent",
+                    description="Recommends travel destinations based on preferences",
+                    instructions=(
+                        "You are a Destination Recommendation Agent. "
+                        "Recommend destinations based on customer preferences. "
+                        "Be creative and match recommendations to customer needs."
                     ),
-                )
-                .on_event(on_event, mode=MagenticCallbackMode.STREAMING)
-                .with_standard_manager(
-                    chat_client=self.chat_client,
-                    max_round_count=8,
-                    max_stall_count=2,
-                    max_reset_count=1,
-                )
-                .build()
+                    client=self.chat_client,
+                ),
+            ]
+            manager = GuardedMagenticManager(
+                agent=Agent(
+                    name="MagenticManager",
+                    description="Coordinates travel planning agents",
+                    instructions=(
+                        "Coordinate the agents to fulfill the user's request. "
+                        "Route customer inquiry analysis to CustomerQueryAgent, destination recommendations to "
+                        "DestinationAgent, and itinerary, hotel, or flight planning to ItineraryAgent. "
+                        "Use only the agents needed for the request, combining them for multi-part travel planning. "
+                        "Customer inquiry analysis requires CustomerQueryAgent to use its MCP tool. "
+                        "Hotel lookups require ItineraryAgent to use suggest_hotels, and flight lookups require "
+                        "suggest_flights. Activities-only itineraries do not require those tools. "
+                        "DestinationAgent is LLM-only. "
+                        "Your own facts, plan, or knowledge do not complete requested travel work. "
+                        "Wait for each relevant specialist to respond and finish the required tool work. "
+                        "Do not select unrelated agents or repeat completed work. "
+                        "For a greeting with no travel work, respond directly. "
+                        "Finish as soon as the user's requested tasks are satisfied."
+                    ),
+                    client=self.chat_client,
+                ),
+                available_tool_agents={
+                    name
+                    for name, tool in (
+                        ("CustomerQueryAgent", customer_query_tool),
+                        ("ItineraryAgent", itinerary_tool),
+                    )
+                    if tool
+                },
+                max_round_count=8,
+                max_stall_count=2,
+                max_reset_count=1,
             )
+            workflow = MagenticBuilder(
+                participants=agents,
+                intermediate_output_from=agents,
+                manager=manager,
+            ).build()
 
             # Run workflow in background task
             async def run_workflow():
                 """Execute workflow and mark completion."""
                 nonlocal workflow_done, workflow_error
                 try:
-                    # workflow.run_stream() properly manages all async contexts including MCP tools
-                    async for event in workflow.run_stream(user_message):
+                    final_chunks: list[str] = []
+                    async for event in workflow.run(user_message, stream=True):
+                        if event.type == "output" and not manager.finalization_authorized:
+                            raise RuntimeError("The request could not be verified as complete. Please retry.")
                         event_data = self._convert_workflow_event(event)
                         if event_data:
+                            if event.type == "output" and event_data["event"] == "AgentDelta":
+                                final_chunks.append(event_data["data"]["delta"])
                             await event_queue.put(event_data)
-                except ServiceResponseException as e:
+                    if not final_chunks:
+                        raise RuntimeError("Workflow completed without a final output")
+                    await event_queue.put({
+                        "type": "metadata",
+                        "agent": None,
+                        "event": "FinalResult",
+                        "data": {"agent": None, "message": "".join(final_chunks), "completed": True},
+                    })
+                except TimeoutError as e:
                     # Handle timeout and service errors specially
                     logger.error(f"Service error in workflow: {e}", exc_info=True)
                     workflow_error = e
                     error_event = {
                         "type": "error",  # This is the ChatEvent.type
                         "event": "ServiceError",
-                        "error": {
-                            "message": "Request timed out or service unavailable. Please try again.",
-                            "statusCode": 504,
-                            "reason": {
-                                "message": str(e),
-                            },
-                        },
+                        "message": "Request timed out or service unavailable. Please try again.",
+                        "statusCode": 504,
+                        "data": {"agent": None, "error": str(e)},
                     }
                     await event_queue.put(error_event)
                 except Exception as e:
@@ -260,7 +286,7 @@ class MagenticTravelOrchestrator:
 
                         yield event_data
 
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         if workflow_done:
                             # Drain remaining events
                             while not event_queue.empty():
@@ -287,8 +313,15 @@ class MagenticTravelOrchestrator:
                 except asyncio.CancelledError:
                     pass
                 raise
+            finally:
+                if not workflow_task.done():
+                    workflow_task.cancel()
+                    try:
+                        await workflow_task
+                    except asyncio.CancelledError:
+                        pass
 
-        except ServiceResponseException as e:
+        except TimeoutError as e:
             # Handle timeout and service errors specially
             logger.error(f"Service error in Magentic workflow: {e}", exc_info=True)
             yield {
@@ -333,83 +366,33 @@ class MagenticTravelOrchestrator:
         Returns:
             Event dictionary in our API format, or None if not relevant for UI
         """
-        # Handle different event types from Microsoft Agent Framework
-        if isinstance(event, MagenticOrchestratorMessageEvent):
-            # Orchestrator planning messages
-            message_text = getattr(event.message, "text", "") if event.message else ""
+        if event.type in ("intermediate", "output"):
+            if isinstance(event.data, str):
+                text = event.data
+            elif isinstance(event.data, list):
+                text = "".join(getattr(message, "text", "") or "" for message in event.data)
+            else:
+                text = getattr(event.data, "text", "") or ""
+            if text:
+                agent_id = event.executor_id or "Orchestrator"
+                return {
+                    "type": "metadata",
+                    "agent": agent_id,
+                    "event": "AgentDelta",
+                    "data": {"agent": agent_id, "delta": text},
+                }
 
-            return {
-                "type": "metadata",
-                "agent": "Orchestrator",
-                "event": f"Orchestrator{event.kind.title().replace('_', '')}",
-                "data": {
+        if event.type == "magentic_orchestrator":
+            content = getattr(event.data, "content", None)
+            message = getattr(content, "text", "") or ""
+            if message:
+                return {
+                    "type": "metadata",
                     "agent": "Orchestrator",
-                    "message": message_text,
-                    "kind": event.kind,
-                },
-            }
+                    "event": "OrchestratorInstruction",
+                    "data": {"agent": "Orchestrator", "message": message},
+                }
 
-        elif isinstance(event, MagenticAgentDeltaEvent):
-            # Token-by-token streaming from agents
-            agent_id = event.agent_id or "UnknownAgent"
-
-            return {
-                "type": "metadata",
-                "agent": agent_id,
-                "event": "AgentDelta",
-                "data": {
-                    "agent": agent_id,
-                    "delta": event.text,
-                },
-            }
-
-        elif isinstance(event, MagenticAgentMessageEvent):
-            # Complete agent messages
-            agent_id = event.agent_id or "UnknownAgent"
-            message_text = getattr(event.message, "text", "") if event.message else ""
-
-            return {
-                "type": "metadata",
-                "agent": agent_id,
-                "event": "AgentMessage",
-                "data": {
-                    "agent": agent_id,
-                    "message": message_text,
-                    "role": getattr(event.message, "role", None) if event.message else None,
-                },
-            }
-
-        elif isinstance(event, MagenticFinalResultEvent):
-            # Final result from workflow
-            result_text = getattr(event.message, "text", "") if event.message else "Task completed"
-
-            return {
-                "type": "metadata",
-                "agent": None,
-                "event": "FinalResult",
-                "data": {
-                    "agent": None,
-                    "message": result_text,
-                    "completed": True,
-                },
-            }
-
-        elif isinstance(event, WorkflowOutputEvent):
-            # Final workflow output
-            output_data = str(event.data) if event.data else "Workflow completed"
-
-            return {
-                "type": "metadata",
-                "agent": None,
-                "event": "WorkflowComplete",
-                "data": {
-                    "agent": None,
-                    "output": output_data,
-                    "completed": True,
-                },
-            }
-
-        # Return None for events we don't need to surface to UI
         return None
 
 

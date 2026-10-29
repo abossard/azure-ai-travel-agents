@@ -106,3 +106,86 @@ async def test_get_llm_client_invalid_provider():
 
         with pytest.raises(ValueError, match="Unknown LLM_PROVIDER"):
             await get_llm_client()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_factory", [False, True], ids=["explicit-stack", "default-factory"])
+@pytest.mark.parametrize("api_key", ["test-api-key", None], ids=["api-key", "managed-identity"])
+async def test_azure_openai_authentication_and_lifecycle(monkeypatch, use_factory, api_key):
+    from contextlib import AsyncExitStack
+
+    import httpx
+    from azure.core.credentials import AccessTokenInfo
+    from openai import AsyncAzureOpenAI
+
+    from src.orchestrator.providers import close_llm_clients
+    from src.orchestrator.providers import azure_openai
+
+    monkeypatch.setattr(settings, "llm_provider", "azure-openai")
+    monkeypatch.setattr(settings, "azure_openai_endpoint", "https://example.openai.azure.com/")
+    monkeypatch.setattr(settings, "azure_openai_deployment_name", "test-deployment")
+    monkeypatch.setattr(settings, "azure_openai_api_version", "2024-02-15-preview")
+    monkeypatch.setattr(settings, "azure_openai_api_key", api_key)
+    monkeypatch.setattr(settings, "azure_client_id", "test-client")
+
+    credential = MagicMock(spec=azure_openai.ManagedIdentityCredential)
+    credential.get_token_info = AsyncMock(
+        side_effect=[AccessTokenInfo("first-token", 0), AccessTokenInfo("second-token", 0)]
+    )
+    credential.close = AsyncMock()
+    managed_identity = MagicMock(return_value=credential)
+    monkeypatch.setattr(azure_openai, "ManagedIdentityCredential", managed_identity)
+
+    headers = []
+
+    def respond(request):
+        headers.append(request.headers)
+        return httpx.Response(
+            200,
+            json={
+                "id": "test",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "test-deployment",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            },
+        )
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    clients = []
+
+    def make_client(**kwargs):
+        client = AsyncAzureOpenAI(**kwargs, http_client=http_client)
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr(azure_openai, "AsyncAzureOpenAI", make_client)
+    resources = AsyncExitStack()
+    try:
+        if use_factory:
+            await get_llm_client()
+        else:
+            await AzureOpenAIProvider().get_client(resources)
+
+        for _ in range(2):
+            await clients[0].chat.completions.create(
+                model="test-deployment", messages=[{"role": "user", "content": "test"}]
+            )
+
+        assert not http_client.is_closed
+        if api_key:
+            assert [item.get("api-key") for item in headers] == [api_key, api_key]
+            managed_identity.assert_not_called()
+        else:
+            assert [item.get("authorization") for item in headers] == ["Bearer first-token", "Bearer second-token"]
+            assert credential.get_token_info.await_count == 2
+            credential.get_token_info.assert_awaited_with(azure_openai.AZURE_COGNITIVE_SERVICES_SCOPE, options={})
+    finally:
+        if use_factory:
+            await close_llm_clients()
+        else:
+            await resources.aclose()
+
+    assert http_client.is_closed
+    if not api_key:
+        credential.close.assert_awaited_once()

@@ -2,6 +2,8 @@
 
 Python-based API server using **Microsoft Agent Framework** for multi-agent orchestration with **simplified MCP integration**.
 
+The service uses Agent Framework 1.23.0. Some historical snippets below show earlier SDK APIs; the current implementation is in `src/orchestrator/`.
+
 ## Overview
 
 This is the Python implementation of the orchestration layer using Microsoft Agent Framework (MAF). It provides a clean, maintainable API that relies entirely on MAF's built-in capabilities for MCP server integration and agent orchestration.
@@ -12,7 +14,7 @@ The implementation strictly follows Microsoft Agent Framework best practices, us
 - Built-in `MCPStreamableHTTPTool` for all MCP integrations (no custom transports)
 - Magentic orchestration with proper async lifecycle management
 - True streaming events via asyncio.Queue
-- Graceful degradation when MCP servers are unavailable
+- Explicit errors when planned MCP tools are unavailable
 
 **Key Simplification**: Removed ~300 lines of custom MCP transport code and all async lifecycle complexity by strictly following MAF patterns from official samples.
 
@@ -22,7 +24,7 @@ The implementation strictly follows Microsoft Agent Framework best practices, us
 - ✅ **Magentic Orchestration** - Multi-agent workflow coordination
 - ✅ **Built-in MCP Support** - Using `MCPStreamableHTTPTool` exclusively
 - ✅ **Real-time Streaming** - True SSE streaming with asyncio.Queue
-- ✅ **Graceful Degradation** - Agents work even when MCP servers are down
+- ✅ **Tool-aware errors** - Planned tool work cannot silently fall back to an LLM-only answer
 - ✅ **Async Best Practices** - Proper lifecycle management, no cancel scope errors
 - ✅ **OpenTelemetry Ready** - Built-in observability support
 - ✅ **Multiple LLM Providers** - Azure OpenAI, GitHub Models, Ollama, Docker Models
@@ -38,13 +40,7 @@ async with create_mcp_client(url) as (read, write, session):
     result = await session.call_tool(...)
 ```
 
-**After**: Built-in MAF tools with automatic lifecycle management
-```python
-# NEW - MAF built-in, simple and reliable
-tool = MCPStreamableHTTPTool(name="...", url="...")
-agent = ChatAgent(chat_client=client, tools=tool)
-workflow = MagenticBuilder().participants(MyAgent=agent).build()
-```
+**After**: Built-in MAF tools with automatic lifecycle management.
 
 ### Tool Registry Pattern
 
@@ -52,20 +48,11 @@ The `ToolRegistry` now only stores metadata - no persistent connections:
 - Each workflow creates fresh MCP tool instances
 - Tools are passed to agents at creation time
 - MAF handles all connection lifecycle automatically
-- Graceful fallback when servers are unavailable
+- Explicit errors when a planned tool is unavailable
 
 ### True Streaming
 
-Events flow in real-time using asyncio.Queue:
-```python
-event_queue = asyncio.Queue()
-async def on_event(event): 
-    await event_queue.put(convert_event(event))
-workflow = MagenticBuilder().on_event(on_event, mode=STREAMING).build()
-# Stream to client as events arrive
-async for event in workflow.run_stream(message):
-    yield event
-```
+The Magentic workflow streams intermediate and final events to the chat API.
 
 ## Quick Start
 
@@ -108,18 +95,19 @@ AZURE_OPENAI_DEPLOYMENT_NAME=gpt-5
 
 # MCP Servers (Docker containers)
 MCP_CUSTOMER_QUERY_URL=http://localhost:5001
-MCP_ITINERARY_PLANNING_URL=http://localhost:5002
-MCP_ECHO_PING_URL=http://localhost:5003
+MCP_DESTINATION_RECOMMENDATION_URL=http://localhost:5002
+MCP_ITINERARY_PLANNING_URL=http://localhost:5003
+MCP_ECHO_PING_URL=http://localhost:5004
 ```
 
 ### Run
 
 ```bash
-# Start API server (from src/api-python)
+# Start API server (from packages/api-maf-python)
 uvicorn src.main:app --reload --port 4010 --log-level=debug
 ```
 
-Server starts at `http://localhost:8000`
+Server starts at `http://localhost:4010`
 
 
 ## API Endpoints
@@ -217,52 +205,25 @@ This implementation uses **Microsoft Agent Framework's built-in MCP support**, r
 - ✅ `MCPStreamableHTTPTool` from MAF (no custom transport)
 - ✅ Factory pattern for tool creation (no persistent connections)
 - ✅ MAF handles all lifecycle management (no manual async context managers)
-- ✅ Graceful error handling (warnings, not exceptions)
+- ✅ Explicit errors for missing or unsuccessful planned tool work
 
-**Key Pattern:**
-```python
-# Create MCP tool
-mcp_tool = MCPStreamableHTTPTool(
-    name="Customer Query",
-    url="http://localhost:5001/mcp",
-    load_tools=True,
-)
-
-# Attach to agent - MAF handles lifecycle
-agent = ChatAgent(
-    name="CustomerQueryAgent",
-    description="...",
-    instructions="...",
-    chat_client=chat_client,
-    tools=mcp_tool,  # MAF manages this automatically
-)
-```
+The customer and itinerary agents receive tools from the registry; the destination agent uses the LLM without MCP.
 
 ### Magentic Orchestration
 
 Uses MAF's Magentic pattern for multi-agent coordination:
 
-```python
-workflow = (
-    MagenticBuilder()
-    .participants(
-        CustomerQueryAgent=customer_agent,
-        ItineraryAgent=itinerary_agent,
-        DestinationAgent=destination_agent,
-        EchoAgent=echo_agent,
-    )
-    .on_event(event_handler, mode=MagenticCallbackMode.STREAMING)
-    .with_standard_manager(
-        chat_client=chat_client,
-        max_round_count=15,
-    )
-    .build()
-)
+The workflow coordinates customer, itinerary, and destination agents through a manager agent. Its planning call
+produces a structured specialist and tool plan, and the manager verifies that work before authorizing a final answer.
+Invalid plans and unverified round or reset termination produce errors. Greetings can use a direct response. Intent
+selection remains model-driven, so an incorrectly classified plan can still omit needed work.
 
-# Stream events to UI
-async for event in workflow.run_stream(message):
-    yield convert_event(event)
-```
+For a planned tool, failed or missing calls remain pending until a later call with the same normalized inputs succeeds,
+including after a workflow reset. Success for different inputs does not clear them, so a retry that corrects inputs may
+still end in an error.
+
+When a provider reuses a tool-call ID, each occurrence needs a distinct SDK occurrence ID and a matching result ID.
+Providers or SDK paths that omit those IDs fail closed on reuse; non-reused calls do not require them.
 
 ### Agent Architecture
 
@@ -305,8 +266,8 @@ async for event in workflow.run_stream(message):
 │     MCP Servers (Docker)        │
 │                                 │
 │  • customer-query (5001/mcp)    │
-│  • itinerary-planning (5002/mcp)│
-│  • echo-ping (5003/mcp)         │
+│  • itinerary-planning (5003/mcp/)│
+│  • echo-ping (5004/mcp)         │
 └─────────────────────────────────┘
 ```
 
@@ -394,7 +355,7 @@ pytest --cov=src --cov-report=html
 **Problem:** UI not receiving events
 
 **Checklist:**
-1. ✅ Using `workflow.run_stream()` (not `workflow.run()`)
+1. ✅ Using `workflow.run(..., stream=True)`
 2. ✅ Events converted in `_convert_workflow_event()`
 3. ✅ SSE headers set correctly
 4. ✅ No buffering in nginx/proxy
@@ -404,7 +365,7 @@ pytest --cov=src --cov-report=html
 **Problem:** Agent doesn't call MCP tools
 
 **Check:**
-1. Tool passed to `ChatAgent` (not `None`)
+1. Tool passed to the agent (not `None`)
 2. MCP server is actually reachable
 3. LLM model supports function calling
 4. Instructions mention using tools
@@ -422,46 +383,19 @@ pytest --cov=src --cov-report=html
 
 ## Key Features
 
-### Graceful Degradation
+### Tool Availability
 
-Agents continue working even when MCP servers are unavailable:
-
-```python
-# Agent created with tools=None still works!
-agent = ChatAgent(
-    name="BasicAgent",
-    description="...",
-    instructions="...",
-    chat_client=chat_client,
-    tools=None,  # No MCP tools - uses LLM knowledge
-)
-```
+Tools listed as required in the manager's plan must succeed before a final answer. A tool-optional request can use
+LLM-only behavior when tool configuration is absent; a configured but unreachable server can still fail. The
+model-selected plan can omit work the user requested.
 
 ### Real-time Streaming
 
-All agent activities stream to UI in real-time:
-
-```python
-async for event in workflow.run_stream(message):
-    # Events stream as they occur
-    # - OrchestratorPlanning
-    # - AgentDelta (token by token)
-    # - AgentMessage
-    # - FinalResult
-    yield convert_event(event)
-```
+Intermediate and final workflow output streams to the UI.
 
 ### Built-in Observability
 
-OpenTelemetry tracing is enabled automatically:
-
-```python
-from agent_framework.observability import setup_observability
-
-setup_observability(enable_sensitive_data=True)
-```
-
-Traces are exported to configured OTLP endpoint (Jaeger, Azure Monitor, etc.).
+OpenTelemetry exports to Azure Monitor when an Application Insights connection string is configured, or to the configured OTLP endpoint otherwise.
 
 ## Documentation
 
@@ -478,10 +412,10 @@ Traces are exported to configured OTLP endpoint (Jaeger, Azure Monitor, etc.).
 
 **MCP server not reachable**
 - Check server is running: `curl http://localhost:5001/health`
-- Agent will run without tools using LLM knowledge (graceful degradation)
+- Work planned to require that server's tool cannot complete successfully until it is available.
 
 **Events not streaming**
-- Ensure using `workflow.run_stream()` not `workflow.run()`
+- Ensure using `workflow.run(..., stream=True)`
 - Check asyncio.Queue is properly configured
 
 ### Testing

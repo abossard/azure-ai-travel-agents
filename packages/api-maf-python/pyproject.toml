@@ -18,11 +18,12 @@ dependencies = [
     "opentelemetry-sdk>=1.30.0",
     "opentelemetry-exporter-otlp-proto-grpc>=1.30.0",
     "opentelemetry-instrumentation-fastapi>=0.51b0",
+    "azure-monitor-opentelemetry>=1.8.11,<2",
     # Azure authentication and AI
     "azure-identity>=1.20.0",
     "openai>=1.59.5",
     # Microsoft Agent Framework - includes built-in MCP support
-    "agent-framework>=1.0.0b251001",
+    "agent-framework==1.23.0",
 ]
 
 [project.optional-dependencies]

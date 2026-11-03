@@ -1,8 +1,8 @@
-# Health model modelspec: Azure AI Travel Agents comparison
+# Health model modelspec: Azure AI Travel Agents
 
 ## modelspec CONCEPT
 
-Stable IDs below describe the deployed four-candidate design. `done` means the row's specific work is evidenced, not that the app or model is healthy. The one observed Degraded rollup does not establish every alternative-choice scenario.
+Current IaC configures one combined model. The four-candidate settings, observations and deployment records below remain historical evidence, not proof that the combined model is deployed or healthy. `done` means the row's specific work is evidenced. The one observed Degraded rollup does not establish every alternative-choice scenario.
 
 ## What does health mean for my workload?
 
@@ -20,6 +20,22 @@ Opening the UI, selecting an orchestrator, discovering tools, understanding pref
 
 | Model Name | Purpose and platform/workload role | Owner and team/organizational/legal boundary | Tenant, subscription and resource scope | Sources or gap | Status |
 |------------|------------------------------------|---------------------------------------------|-----------------------------------------|----------------|--------|
+| M_HEALTH; `<environmentName>-health` (`anbotrai-health` for the evaluated environment) | Combined availability, stability, capacity and response-time health | Owner not supplied; one workload boundary | Workload resource group; supported health-model region | User request, 2026-11-02: "merge them please."; infra/healthmodel.bicep; infra/healthmodels.bicep | implemented locally; not deployed |
+
+| Current configuration | Value | Verification |
+|-----------------------|-------|--------------|
+| Topology | 17 entities including the implicit root; 16 relationships | Existing dependency topology retained |
+| Signals | 32 metric, 11 log-query and 2 Resource Health signals; 7 metric definitions | Local compilation and offline evaluator fixtures |
+| Logged assistant or required-tool errors | Degraded >0; Unhealthy >2 per five-minute window | Retains the former Stability threshold |
+| Other thresholds | Existing availability, termination, capacity and response-time thresholds | Combined without profile selection |
+| Permissions | One system-assigned identity; Reader on the resource group and Monitoring Reader on the workspace | Two assignments declared; not deployed |
+| Migration | Incremental deployment creates the combined model; old models and histories remain | No Azure writes or deletions performed; retire old models separately after replacement verification |
+| Evidence limits | Cloud validation, deployment and live evaluation of the combined model are pending | Earlier four-profile records below do not verify this configuration |
+
+### Historical comparison models
+
+| Model Name | Purpose and platform/workload role | Owner and team/organizational/legal boundary | Tenant, subscription and resource scope | Sources or gap | Status |
+|------------|------------------------------------|---------------------------------------------|-----------------------------------------|----------------|--------|
 | M_PLATFORM; anbotrai-platform | Availability baseline | Owner not supplied; same workload comparison boundary | Subscription 6fc552c5-06b6-43d7-ac70-2f1eda1be033; proposed rg-anbotrai | S1-S5; G_DEPLOYMENT | new |
 | M_STABILITY; anbotrai-stability | Baseline plus container-termination evidence | Same as M_PLATFORM | Same proposed scope | S1-S6,S31 | new |
 | M_CAPACITY; anbotrai-capacity | Baseline plus CPU/memory pressure | Same as M_PLATFORM | Same proposed scope | S1-S6 | new |
@@ -27,11 +43,11 @@ Opening the UI, selecting an orchestrator, discovering tools, understanding pref
 
 ## High-level health model diagram
 
-Each model has one user flow, six functional components and nine resource leaves. Assistant and destination alternatives aggregate their own resource states. Resource copies have one parent, never shared edges. The readable diagram is in plan.md.
+The combined model has one user flow, six functional components and nine resource leaves. Assistant and destination alternatives aggregate their own resource states. Resource copies have one parent, never shared edges. The readable diagram is in plan.md.
 
 ```mermaid
 flowchart TB
-    M_ROOT["M_*: implicit model root"]
+    M_ROOT["M_HEALTH: implicit model root"]
     F_TRIP["F_TRIP: plan a trip"]
     C_UI["C-interface"]
     C_API["C-assistant"]
@@ -97,7 +113,7 @@ Let `RG=/subscriptions/6fc552c5-06b6-43d7-ac70-2f1eda1be033/resourceGroups/rg-an
 
 | Alert | Confirmed placement and health objective | Existing rule and suitability | Sources, lookup coverage or gap | Status |
 |-------|-----------------------------------------|-------------------------------|---------------------------------|--------|
-| A_FLOW | Proposed degraded Sev2 and unhealthy Sev1 on F_TRIP, all four models | Existing enabled rule `/subscriptions/6fc552c5-06b6-43d7-ac70-2f1eda1be033/resourcegroups/rg-anbotrai/providers/microsoft.alertsmanagement/smartdetectoralertrules/failure anomalies - appi-uuj7bntzehqsu` targets Application Insights and detects anomalous increases in failed requests/dependencies, not model entity health; it is not a substitute. No action group chosen | S20; G_ROUTING, G_APPROVAL | new |
+| A_FLOW | Proposed degraded Sev2 and unhealthy Sev1 on F_TRIP in M_HEALTH | Existing enabled rule `/subscriptions/6fc552c5-06b6-43d7-ac70-2f1eda1be033/resourcegroups/rg-anbotrai/providers/microsoft.alertsmanagement/smartdetectoralertrules/failure anomalies - appi-uuj7bntzehqsu` targets Application Insights and detects anomalous increases in failed requests/dependencies, not model entity health; it is not a substitute. No action group chosen | S20; user merge request, 2026-11-02; G_ROUTING, G_APPROVAL | configured locally; combined model not deployed |
 
 ## Shared source material
 

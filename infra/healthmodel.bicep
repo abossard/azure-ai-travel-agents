@@ -1,16 +1,8 @@
-@description('Name of one comparison model. Deploy separately from the application.')
+@description('Name of the combined workload health model. Deploy separately from the application.')
 param healthModelName string
 
 @description('A supported Microsoft.CloudHealth region, verified before deployment.')
 param location string
-
-@allowed([
-  'platform'
-  'stability'
-  'capacity'
-  'experience'
-])
-param profile string
 
 @description('Actual deployed Microsoft.CognitiveServices/accounts resource name.')
 param aiAccountName string
@@ -69,7 +61,7 @@ resource authentication 'Microsoft.CloudHealth/healthmodels/authenticationsettin
 var containerNamespace = 'Microsoft.App/containerApps'
 var aiNamespace = 'Microsoft.CognitiveServices/accounts'
 var applicationInsightsId = resourceId('Microsoft.Insights/components', applicationInsightsName)
-var metricDefinitions = concat([
+var metricDefinitions = [
   {
     name: 'replicas'
     displayName: 'Running replicas'
@@ -92,7 +84,6 @@ var metricDefinitions = concat([
     degraded: 99
     unhealthy: 95
   }
-], profile == 'capacity' ? [
   {
     name: 'cpu'
     displayName: 'CPU usage'
@@ -115,7 +106,6 @@ var metricDefinitions = concat([
     degraded: 80
     unhealthy: 95
   }
-] : [], profile == 'experience' ? [
   {
     name: 'response-fast'
     displayName: 'UI or tool response time'
@@ -149,7 +139,7 @@ var metricDefinitions = concat([
     degraded: 30000
     unhealthy: 60000
   }
-] : [])
+]
 
 resource definitions 'Microsoft.CloudHealth/healthmodels/signaldefinitions@2026-11-01' = [
   for definition in metricDefinitions: {
@@ -267,8 +257,8 @@ resource resources 'Microsoft.CloudHealth/healthmodels/entities@2026-11-01' = [
           azureResourceId: resourceId(binding.ai ? aiNamespace : containerNamespace, binding.resourceName)
           signals: map(concat(
             [binding.ai ? 'ai-availability' : 'replicas'],
-            !binding.ai && profile == 'capacity' ? ['cpu', 'memory'] : [],
-            profile == 'experience' ? [binding.ai ? 'ai-latency' : (binding.component == 'assistant' ? 'response-chat' : 'response-fast')] : []
+            !binding.ai ? ['cpu', 'memory'] : [],
+            [binding.ai ? 'ai-latency' : (binding.component == 'assistant' ? 'response-chat' : 'response-fast')]
           ), signalName => {
             name: signalName
             signalKind: 'AzureResourceMetric'
@@ -278,7 +268,7 @@ resource resources 'Microsoft.CloudHealth/healthmodels/entities@2026-11-01' = [
             enabled: binding.ai ? 'Enabled' : 'Disabled'
           }
         }
-      }, binding.component == 'assistant' || (profile == 'stability' && !binding.ai) ? {
+      }, !binding.ai ? {
         azureLogAnalytics: {
           authenticationSetting: authentication.name
           logAnalyticsWorkspaceResourceId: workspace.id
@@ -299,7 +289,7 @@ resource resources 'Microsoft.CloudHealth/healthmodels/entities@2026-11-01' = [
                 }
                 unhealthyRule: {
                   operator: 'GreaterThan'
-                  threshold: profile == 'stability' ? 2 : 3
+                  threshold: 2
                 }
               }
             }
@@ -320,11 +310,11 @@ resource resources 'Microsoft.CloudHealth/healthmodels/entities@2026-11-01' = [
                 }
                 unhealthyRule: {
                   operator: 'GreaterThan'
-                  threshold: profile == 'stability' ? 2 : 3
+                  threshold: 2
                 }
               }
             }
-          ] : [], profile == 'stability' && !binding.ai ? [
+          ] : [], !binding.ai ? [
             {
               name: 'container-terminations'
               signalKind: 'LogAnalyticsQuery'

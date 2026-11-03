@@ -1,4 +1,4 @@
-@description('Existing azd environment name, used as the model name prefix.')
+@description('Existing azd environment name, used as the health model name prefix.')
 param environmentName string
 
 @description('Supported health-model region. May differ from the monitored resources.')
@@ -13,25 +13,15 @@ param logAnalyticsWorkspaceName string
 @description('Actual Application Insights resource name from the deployed workload inventory.')
 param applicationInsightsName string
 
-var profiles = [
-  'platform'
-  'stability'
-  'capacity'
-  'experience'
-]
-
-module comparison './healthmodel.bicep' = [
-  for profile in profiles: {
-    name: 'healthmodel-${profile}'
-    params: {
-      healthModelName: '${environmentName}-${profile}'
-      location: location
-      profile: profile
-      aiAccountName: aiAccountName
-      logAnalyticsWorkspaceName: logAnalyticsWorkspaceName
-      applicationInsightsName: applicationInsightsName
-    }
+module healthModel './healthmodel.bicep' = {
+  name: 'healthmodel'
+  params: {
+    healthModelName: '${environmentName}-health'
+    location: location
+    aiAccountName: aiAccountName
+    logAnalyticsWorkspaceName: logAnalyticsWorkspaceName
+    applicationInsightsName: applicationInsightsName
   }
-]
+}
 
-output healthModelIds array = [for (profile, index) in profiles: comparison[index].outputs.healthModelId]
+output healthModelIds array = [healthModel.outputs.healthModelId]

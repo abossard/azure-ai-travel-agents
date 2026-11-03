@@ -1,30 +1,29 @@
-# Travel agent health models
+# Travel agent health model
 
-The health models describe whether the **Plan a trip** flow and its dependencies are healthy. Four profiles monitor the same application with different signals, so their behavior can be compared.
-
-![Azure Portal listing the four travel-agent health models](images/models.png)
+One health model describes whether the **Plan a trip** flow and its dependencies are healthy. It combines availability, stability, capacity, and response-time signals from the former four comparison profiles.
 
 ## What is included
 
 | File | Purpose |
 |------|---------|
-| `infra/healthmodels.bicep` | Deploys one model for each comparison profile. |
-| `infra/healthmodel.bicep` | Defines the shared topology, signals, identities, roles, and alerts for one profile. |
+| `infra/healthmodels.bicep` | Deploys one combined model named `<environmentName>-health`. |
+| `infra/healthmodel.bicep` | Defines the topology, all signals, identity, roles, and alerts. |
 
 These are standalone templates. They do not change the application, its deployment, or `azd up`.
 
-## Profiles
+## Signal coverage
 
-All profiles monitor running replicas, Azure AI availability and Resource Health, and selected assistant or required-tool errors.
+The model monitors running replicas, Azure AI availability and Resource Health, selected assistant or required-tool errors, container terminations, CPU, memory, and response time.
 
-| Profile | Additional evidence | Signals |
-|---------|---------------------|---------|
-| Platform | Common signals only | 15 |
-| Stability | Container terminations and a stricter error threshold | 22 |
-| Capacity | CPU and memory | 29 |
-| Experience | UI, tool, assistant, and AI response time | 24 |
+| Evidence | Signals |
+|----------|---------|
+| Availability, Resource Health, and selected errors | 15 |
+| Container terminations | 7 |
+| CPU and memory | 14 |
+| UI, tool, assistant, and AI response time | 9 |
+| **Total** | **45** |
 
-Each model has 17 entities, including its automatic root, and 16 relationships. The trip flow depends on the chat interface, assistant coordination, customer preferences, destination recommendations, itinerary planning, and AI generation. The three assistant implementations are alternatives. Destination recommendations can use the destination MCP server or AI.
+The model has 17 entities, including its automatic root, and 16 relationships. The trip flow depends on the chat interface, assistant coordination, customer preferences, destination recommendations, itinerary planning, and AI generation. The three assistant implementations are alternatives. Destination recommendations can use the destination MCP server or AI.
 
 ```mermaid
 flowchart TD
@@ -60,15 +59,19 @@ Metric and log windows are five minutes and refresh every minute. The trip flow'
 |--------|----------|-----------|
 | Running replicas | Below 1 | Below 0.5 |
 | AI availability | Below 99% | Below 95% |
-| Logged assistant or required-tool errors | Above 0 | Above 2 in Stability; above 3 elsewhere |
-| Container terminations, Stability | Above 0 | Above 3 |
-| CPU or memory, Capacity | Above 80% | Above 95% |
-| UI or tool response, Experience | Above 1 second | Above 3 seconds |
-| Assistant or AI response, Experience | Above 30 seconds | Above 60 seconds |
+| Logged assistant or required-tool errors | Above 0 | Above 2 |
+| Container terminations | Above 0 | Above 3 |
+| CPU or memory | Above 80% | Above 95% |
+| UI or tool response | Above 1 second | Above 3 seconds |
+| Assistant or AI response | Above 30 seconds | Above 60 seconds |
 
-The error queries count selected log messages, not failed requests. Termination counts can include planned deployments. Response times are averages across routes, not per-chat latency or proof of a complete answer.
+The combined model retains the former Stability profile's stricter error threshold. The error queries count selected log messages, not failed requests. Termination counts can include planned deployments. Response times are averages across routes, not per-chat latency or proof of a complete answer.
 
-## What was observed
+## Historical comparison
+
+These observations concern the former four profiles, not the combined model. The combined configuration has not been deployed or evaluated live.
+
+![Azure Portal listing the former four travel-agent health models](images/models.png)
 
 In a bounded Python exercise, two requests completed in 56.74 and 82.93 seconds; a third hit the 110-second client deadline. Experience became Degraded while the other model roots remained Healthy. Its Python response signal reported a 46.37-second average across routes, which cannot be attributed to the timed-out request alone.
 
@@ -91,13 +94,17 @@ These templates are separate from `azd up`. Deploy `infra/healthmodels.bicep` to
 - The resource group has an Azure AI account, a Log Analytics workspace, and an Application Insights component linked to that workspace. Their names are deployment parameters.
 - For meaningful signals, the monitored Container Apps exist with the names in `infra/healthmodel.bicep`: `ui-angular`, `api-langchain-js`, `api-llamaindex-ts`, `api-maf-python`, `mcp-customer-query`, `mcp-destination-recommendation`, and `mcp-itinerary-planning`.
 
-Supply `environmentName`, `location`, `aiAccountName`, `logAnalyticsWorkspaceName`, and `applicationInsightsName`. The environment name prefixes the four model names. Run `az deployment group validate` and `az deployment group what-if`, review the proposed changes, then use `az deployment group create` to deploy the template.
+Supply `environmentName`, `location`, `aiAccountName`, `logAnalyticsWorkspaceName`, and `applicationInsightsName`. The model name is `<environmentName>-health`, for example `anbotrai-health`. Run `az deployment group validate` and `az deployment group what-if`, review the proposed changes, then use `az deployment group create` to deploy the template.
 
-Each model receives a system-assigned managed identity, **Reader** on the resource group, and **Monitoring Reader** on the workspace. Creating the four models therefore creates eight role assignments. Monitoring Reader grants access to workspace telemetry beyond the aggregate queries in these templates. The alert configurations have no action groups or recipients.
+The model receives a system-assigned managed identity, **Reader** on the resource group, and **Monitoring Reader** on the workspace, creating two role assignments. Monitoring Reader grants access to workspace telemetry beyond the aggregate queries in these templates. The alert configurations have no action groups or recipients.
+
+Deploy this template in incremental mode. It creates the combined model without deleting the former `<environmentName>-platform`, `-stability`, `-capacity`, and `-experience` models or moving their histories. Retire those models separately after verifying the replacement; their evaluations and alerts continue while they remain deployed.
 
 The log signals depend on application telemetry arriving in the expected Log Analytics tables and matching the queries. In particular, the Python required-tool discovery signal expects Application Insights traces with the configured logger name. A zero count without that telemetry is not evidence that the tool is healthy.
 
-The models schedule approximately 33,120 log and 84,960 metric evaluations per day in total. Actual billing is unknown. The local Bicep compiler may report `BCP081` warnings if it lacks types for the CloudHealth API.
+The combined model schedules approximately 15,840 log and 46,080 metric evaluations per day. Actual billing is unknown. The local Bicep compiler may report `BCP081` warnings if it lacks types for the CloudHealth API.
+
+The evaluator's snapshot and readback commands target `anbotrai-health`. Readback contracts must be regenerated for the combined model and current template hashes; old four-profile contracts are rejected.
 
 ### Application work outside this branch
 
@@ -113,8 +120,12 @@ The Python partial-work guard and MCP connection cleanup are separate correctnes
 
 ### Validation
 
-On 28 October 2026, the templates compiled locally with seven `BCP081` warnings because the installed Bicep version lacked CloudHealth types. Azure provider validation succeeded for both the existing model names and a new model-name prefix.
+The combined entry template compiles locally with seven `BCP081` warnings. Offline fixtures verify a single-model snapshot with all 45 signals and reject missing signals or metric definitions. Cloud validation, deployment, and live signal evaluation remain unverified for the combined configuration.
+
+### Historical validation
+
+On 28 October 2026, the former four-profile templates compiled locally with seven `BCP081` warnings because the installed Bicep version lacked CloudHealth types. Azure provider validation succeeded for both the existing model names and a new model-name prefix.
 
 An incremental what-if for the new prefix predicted 157 creations, including four models and eight role assignments, with no modifications or deletions of existing resources. A preview using the existing names reported 72 modifications: 64 entities and eight role assignments. Entity differences included service-populated health/status values and defaults; role principal IDs remained unresolved expressions in the preview. Do not assume a redeployment is a no-op without reviewing its what-if.
 
-These exact templates were deployed earlier. A later readback matched the four model configurations and their expected role assignments; it did not enumerate additional assignments or establish signal health. The new-prefix validation and previews did not deploy another set of models, and they do not guarantee deployment in another subscription.
+The former four-profile templates were deployed earlier. A later readback matched the four model configurations and their expected role assignments; it did not enumerate additional assignments or establish signal health. The new-prefix validation and previews did not deploy another set of models, and they do not guarantee deployment of the combined configuration or deployment in another subscription.

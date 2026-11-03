@@ -1,6 +1,6 @@
 # Health Model for Azure AI Travel Agents
 
-**Deployed:** The effect of an unavailable assistant is an assumption. One Degraded assistant was observed to degrade the shared flow; other alternative-choice scenarios remain unverified.
+**Configuration:** One combined model, not yet deployed. The live results below describe the former four-profile comparison. One Degraded assistant was observed to degrade the shared flow; other alternative-choice scenarios remain unverified.
 
 ## What does health mean for my workload?
 
@@ -12,24 +12,24 @@
 
 | User flow | What users do | Depends on | Signals | Health target | Alert |
 |-----------|---------------|------------|---------|---------------|-------|
-| Plan a trip | Open chat, describe preferences, explore destinations and build an itinerary | Chat interface, assistant coordination, preference extraction, destination recommendations, itinerary planning and advice generation | Running service instances, AI's reported status and request availability, logged assistant or required-tool failures, plus the selected comparison signals | 99.9% (assumed) | Degraded or unhealthy, no notification routing |
+| Plan a trip | Open chat, describe preferences, explore destinations and build an itinerary | Chat interface, assistant coordination, preference extraction, destination recommendations, itinerary planning and advice generation | Running service instances, AI status and availability, logged errors, container terminations, CPU, memory and response time | 99.9% (assumed) | Degraded or unhealthy, no notification routing |
 
 **Not modelled:** Echo Test, which is not selected by default; local LLM providers, which are not configured by the Azure deployment.
 
-The four models have the same dependencies and basic availability checks. Each adds one different kind of evidence:
+One model named `<environmentName>-health` combines the evidence previously split across four models:
 
-| Model | Additional evidence | What the comparison tests |
-|-------|---------------------|---------------------------|
-| Platform | None | Whether running instances, AI availability and selected error logs detect user-visible failures |
-| Stability | Container terminations and a more sensitive logged-error threshold | Whether crashes and repeated workflow errors are detected without unnecessary warnings |
-| Capacity | CPU and memory usage | Whether resource pressure gives useful early warning |
-| Experience | Response times of UI, assistants, tools and AI | Whether slow answers are detected while services still run |
+| Evidence | What it shows | Signals |
+|----------|---------------|---------|
+| Running instances, AI availability and selected error logs | Availability and recorded assistant or required-tool failures | 15 |
+| Container terminations | Stopped containers, including planned replacements | 7 |
+| CPU and memory usage | Resource pressure | 14 |
+| Response times of UI, assistants, tools and AI | Slow responses while services still run | 9 |
 
-Together the models schedule about 33,120 log checks and 84,960 metric checks per day. Actual charges are unknown.
+The model has 45 signals and schedules about 15,840 log checks and 46,080 metric checks per day. Actual charges are unknown. Deploying it does not delete the old models or move their histories; retire them separately after verifying the replacement.
 
 ## Diagram
 
-The three assistant choices share the same user flow. Destination recommendations can come from the destination service or AI, depending on the selected assistant.
+The three assistant choices share the same user flow. Destination recommendations can come from the destination service or AI, depending on the selected assistant. The diagram shows dependencies and baseline signals; termination, capacity and response-time checks apply to the same resource leaves.
 
 ```mermaid
 flowchart TB
@@ -53,7 +53,7 @@ flowchart TB
     SIG["Running replicas<br/>Warnings below 1; unhealthy below 0.5<br/>5-minute average"]:::signal
     ASIG["AI request availability<br/>Warnings below 99%; unhealthy below 95%<br/>5-minute average"]:::signal
     AHEALTH["AI service's platform-reported status"]:::signal
-    LOG["Logged assistant or required-tool failures<br/>Warning above 0<br/>Unhealthy above 2 in Stability, above 3 otherwise<br/>in 5 minutes"]:::signal
+    LOG["Logged assistant or required-tool failures<br/>Warning above 0<br/>Unhealthy above 2<br/>in 5 minutes"]:::signal
     ROOT --> FLOW
     FLOW --> UI & API & PREF & DEST & PLAN & AI
     UI --> RUI
@@ -77,13 +77,13 @@ flowchart TB
 
 Read top to bottom. Solid arrows mean **depends on**; dotted arrows connect measurements. Shared parts take the worst known health of what they need; assistant and destination choices account for alternatives. **Unknown** means there is not enough information to tell.
 
-## Live baseline
+## Historical baseline
 
 At 08:56 UTC on 28 October, each model's overall state was Healthy. Experience had seven Unknown response-time checks. A Healthy overall state does not establish that a chat or inference succeeded.
 
 Two malformed-input defects in the snapshot parser were reproduced and repaired locally. Captured Resource Health names follow Azure's generated-name pattern, and an independent offline retest passed.
 
-## Live usage
+## Historical usage
 
 Three Python requests ran against the existing application revision. Two completed in 56.74 and 82.93 seconds, with their specialists observed in sampled traces. The itinerary request reached its customer and itinerary specialists but hit the 110-second client deadline.
 
@@ -126,11 +126,11 @@ The two Healthy alternative assistants each had an Unknown response-time signal.
 
 Experience's trip-flow alert fired at 09:02:38 UTC and its monitor condition resolved at 09:07:39 UTC. It had no configured notification recipients.
 
-**Candidate:** Experience is the most informative model for this slow-response sample. It is not a complete readiness or correctness check: missing response samples, route-level averaging, unrouted alerts and untested pressure/failure cases remain.
+**Comparison result:** Experience was the most informative model for this slow-response sample. Its response-time checks are now included in the combined model. Missing response samples, route-level averaging, unrouted alerts and untested pressure/failure cases remain.
 
 The destination service also logged 320 unavailable-stream keepalive warnings in each of two later five-minute windows. The same 32 sessions produced 33,963 warnings over observed spans of 7 hours 41 minutes to 9 hours 24 minutes, representing 24 MB of billable-size log data. Actual charges and user impact are unknown. The models do not directly check those warnings.
 
-## Early comparison
+## Historical comparison
 
 These are predictions from observed source data, not states observed in deployed models. Other checks can change the overall state.
 
@@ -164,17 +164,18 @@ These are configured expectations, not results from deliberate fault injection.
 - Customer preference and itinerary tools are required for a full trip; destination recommendations use the selected assistant's source.
 - One unavailable assistant or destination source makes the trip-planning flow Degraded when another choice remains healthy. If every choice is Degraded or Unhealthy, it becomes Unhealthy.
 - Measurements use five-minute windows and refresh every minute. Terminations above zero warn, and above three are unhealthy; planned replacements also count.
-- Logged assistant or required-tool failures warn above zero. Stability becomes unhealthy above two, based on three failed test requests; the others become unhealthy above three. Multiple log entries for one failure count separately.
+- Logged assistant or required-tool failures warn above zero and become unhealthy above two, retaining the former Stability threshold based on three failed test requests. Multiple log entries for one failure count separately.
 - Required-tool discovery failures from one assistant are also checked in application traces. That check and the console-error check are evaluated separately, so the same logged event is not added twice.
 - CPU and memory warnings start above 80%, unhealthy above 95%.
 - UI/tool response warnings start above 1 second, unhealthy above 3 seconds. Assistant/AI warnings start above 30 seconds, unhealthy above 60 seconds.
-- Experience response-time checks can be Unknown when no requests arrive. AI may report 0ms even when no inference ran.
+- Response-time checks can be Unknown when no requests arrive. AI may report 0ms even when no inference ran.
 - AI uses Azure's reported availability; apps use running-instance checks.
 - Use the workload's resource group and a supported health-model region. A separate region can reduce shared regional failure risk.
 
 ## What to do next?
 
-- Assess Experience's missing response data and separately scoped failure or pressure scenarios.
+- Review the combined model's cloud validation and what-if before deployment; verify its signals before separately retiring the four old models.
+- Assess missing response data and separately scoped failure or pressure scenarios.
 - Decide separately whether to deploy the locally tested Python guard fix and whether to investigate MCP session cleanup.
 - Identify alert recipients, model ownership and attributable monitoring charges.
 

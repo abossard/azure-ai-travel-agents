@@ -71,12 +71,7 @@ RESOURCE_BINDINGS = (
     ("generation", "generation-resource", None, True),
 )
 TOOLS = ("customer-query", "destination-recommendation", "itinerary-planning")
-MODELS = {
-    "anbotrai-platform": "platform",
-    "anbotrai-stability": "stability",
-    "anbotrai-capacity": "capacity",
-    "anbotrai-experience": "experience",
-}
+MODELS = ("anbotrai-health",)
 PROMPTS = (
     (
         "preferences",
@@ -1075,7 +1070,7 @@ def list_model_items(
     raise EvaluationError(f"{collection} pagination exceeded the limit")
 
 
-def expected_signals(profile: str) -> set[tuple[str, str]]:
+def expected_signals() -> set[tuple[str, str]]:
     expected: set[tuple[str, str]] = set()
     for component, entity, backend, is_ai in RESOURCE_BINDINGS:
         if backend is not None:
@@ -1085,13 +1080,11 @@ def expected_signals(profile: str) -> set[tuple[str, str]]:
         expected.add((entity, "ai-availability" if is_ai else "replicas"))
         if is_ai:
             expected.add((entity, RESOURCE_HEALTH_SIGNAL))
-        if not is_ai and profile == "stability":
+        if not is_ai:
             expected.add((entity, "container-terminations"))
-        if not is_ai and profile == "capacity":
             expected.update(((entity, "cpu"), (entity, "memory")))
-        if profile == "experience":
-            name = "ai-latency" if is_ai else "response-chat" if component == "assistant" else "response-fast"
-            expected.add((entity, name))
+        name = "ai-latency" if is_ai else "response-chat" if component == "assistant" else "response-fast"
+        expected.add((entity, name))
     return expected
 
 
@@ -1148,24 +1141,23 @@ def coverage(signals: list[dict[str, Any]]) -> dict[str, int]:
     }
 
 
-def snapshot_model(name: str, profile: str, subscription: str, resource_group: str) -> dict[str, Any]:
+def snapshot_model(name: str, subscription: str, resource_group: str) -> dict[str, Any]:
     path = (
         f"/subscriptions/{subscription}/resourceGroups/{urllib.parse.quote(resource_group, safe='')}"
         f"/providers/Microsoft.CloudHealth/healthmodels/{name}"
     )
     model_url = "https://management.azure.com" + path
-    expected = expected_signals(profile)
+    expected = expected_signals()
     result: dict[str, Any] = {
         "model": name, "captured_at": timestamp(), "provisioningState": None,
         "status": "unavailable", "reason": None, "root": "Unknown",
         "flows": {FLOW: {"healthState": "Unknown"}},
         "components": {component: {"healthState": "Unknown"} for component in COMPONENTS},
         "assistants": {backend: {"healthState": "Unknown"} for backend in BACKENDS},
-    }
-    if profile == "stability":
-        result["limitations"] = [
+        "limitations": [
             "Container terminations can include normal deployments and older revisions, not just failures."
-        ]
+        ],
+    }
     entities: list[dict[str, Any]] = []
     try:
         model = azure_get(f"{model_url}?api-version={API_VERSION}", subscription)
@@ -1454,7 +1446,7 @@ def load_readback_contract(
                     if not isinstance(workspace, str):
                         raise EvaluationError("readback contract has an invalid workspace")
                     workspace_ids.add(workspace.lower())
-        if pairs != expected_signals(MODELS[name]):
+        if pairs != expected_signals():
             raise EvaluationError("readback contract has unexpected signals")
         relationships = named_items(model.get("relationships"), f"{name} relationships")
         expected_edges = {(name, FLOW)} | {(FLOW, component) for component in COMPONENTS} | {
@@ -1471,11 +1463,9 @@ def load_readback_contract(
         ):
             raise EvaluationError("readback contract has unexpected relationships")
         definitions = named_items(model.get("signalDefinitions"), f"{name} signalDefinitions")
-        expected_definitions = {"replicas", "ai-availability"}
-        if MODELS[name] == "capacity":
-            expected_definitions.update(("cpu", "memory"))
-        elif MODELS[name] == "experience":
-            expected_definitions.update(("response-fast", "response-chat", "ai-latency"))
+        expected_definitions = {
+            "replicas", "ai-availability", "cpu", "memory", "response-fast", "response-chat", "ai-latency",
+        }
         if set(definitions) != expected_definitions:
             raise EvaluationError("readback contract has unexpected signal definitions")
         auth = named_items(model.get("authenticationSettings"), f"{name} authenticationSettings")
@@ -1865,7 +1855,7 @@ def main() -> int:
             exit_code = 0 if verified else 1
         elif args.mode == "snapshot":
             subscription, resource_group = scope(values, config)
-            models = [snapshot_model(name, profile, subscription, resource_group) for name, profile in MODELS.items()]
+            models = [snapshot_model(name, subscription, resource_group) for name in MODELS]
             result = {
                 "phase": "snapshot", "label": args.label, "started_at": started_at,
                 "completed_at": timestamp(), "api_version": API_VERSION, "models": models,

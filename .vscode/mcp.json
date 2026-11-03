@@ -13,10 +13,6 @@
       "type": "http",
       "url": "http://localhost:5004/mcp"
     },
-    "mcp-itinerary-planning": {
-      "type": "http",
-      "url": "http://localhost:5003/mcp"
-    },
     "mcp-destination-recommendation": {
       "type": "http",
       "url": "http://localhost:5002/mcp"
